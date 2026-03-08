@@ -9,11 +9,17 @@ router.use('/chat', studentChatRoutes);
 
 router.get('/me', studentController.me);
 router.patch('/me', studentController.updateProfile);
+router.post('/me/change-password', studentController.changePassword);
 router.post('/me/resume', (req, res, next) => {
+  const contentType = req.headers['content-type'] || '';
   studentController.uploadResumeMulter(req, res, (err) => {
     if (err) {
-      if (err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: 'File too large. Max 5MB.' });
-      return res.status(400).json({ error: err.message || 'Invalid file. Use PDF or DOC/DOCX.' });
+      if (err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: 'File too large. Max 20MB.' });
+      if (err.code === 'LIMIT_UNEXPECTED_FILE') return res.status(400).json({ error: 'Unexpected field. Send the file in a field named "resume".' });
+      return res.status(400).json({ error: err.message || 'Upload failed. Use PDF only (max 20MB).' });
+    }
+    if (!req.file && !contentType.includes('multipart')) {
+      console.warn('[resume] Request missing multipart; content-type:', contentType);
     }
     next();
   });

@@ -2,6 +2,7 @@ import * as studentService from '../services/student.service.js';
 import * as applicationService from '../services/application.service.js';
 import * as notificationService from '../utils/notifications.js';
 import pool from '../db/pool.js';
+import bcrypt from 'bcrypt';
 
 function getChatRoomIdByCompanyId(companyId) {
   return pool.query('SELECT id FROM chat_rooms WHERE companyId = ?', [companyId]).then(([r]) => r[0]?.id ?? null);
@@ -9,19 +10,28 @@ function getChatRoomIdByCompanyId(companyId) {
 import path from 'path';
 import fs from 'fs';
 import multer from 'multer';
-import { OFFERS_DIR, RESUMES_DIR } from '../utils/file.js';
+import { OFFERS_DIR, RESUMES_DIR, ensureUploadDirs } from '../utils/file.js';
 
 const resumeStorage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, RESUMES_DIR),
+  destination: (req, file, cb) => {
+    try {
+      ensureUploadDirs();
+      cb(null, RESUMES_DIR);
+    } catch (err) {
+      cb(err);
+    }
+  },
   filename: (req, file, cb) => cb(null, `resume_${req.studentId}_${Date.now()}${path.extname(file.originalname) || '.pdf'}`),
 });
 const resumeUpload = multer({
   storage: resumeStorage,
-  limits: { fileSize: 5 * 1024 * 1024 },
+  limits: { fileSize: 20 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const ext = (path.extname(file.originalname) || '').toLowerCase();
-    const ok = ['.pdf', '.doc', '.docx'].includes(ext) || (file.mimetype && ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'].includes(file.mimetype));
-    cb(null, !!ok);
+    const mimetype = (file.mimetype || '').toLowerCase();
+    const isPdf = ext === '.pdf' || mimetype === 'application/pdf' || mimetype.includes('pdf');
+    if (!isPdf) return cb(new Error('Only PDF files are allowed'), false);
+    cb(null, true);
   },
 });
 export const uploadResumeMulter = resumeUpload.single('resume');
@@ -49,9 +59,38 @@ export async function updateProfile(req, res) {
   res.json({ ...user, canApply: canApply.allowed, canApplyReason: canApply.reason });
 }
 
+export async function changePassword(req, res) {
+  const { currentPassword, newPassword, confirmPassword } = req.body;
+  if (!currentPassword || !newPassword || !confirmPassword) {
+    return res.status(400).json({ error: 'currentPassword, newPassword, confirmPassword are required' });
+  }
+  if (newPassword.length < 6) {
+    return res.status(400).json({ error: 'New password must be at least 6 characters' });
+  }
+  if (newPassword !== confirmPassword) {
+    return res.status(400).json({ error: 'New passwords do not match' });
+  }
+  const authRow = await studentService.getStudentAuthById(req.studentId);
+  if (!authRow) return res.status(404).json({ error: 'Student not found' });
+  let validCurrent = false;
+  if (authRow.password_hash) {
+    validCurrent = await bcrypt.compare(currentPassword, authRow.password_hash);
+  } else if (authRow.dob_hash) {
+    validCurrent = await bcrypt.compare(currentPassword, authRow.dob_hash);
+  }
+  if (!validCurrent) {
+    return res.status(400).json({ error: 'Current password incorrect' });
+  }
+  const newHash = await bcrypt.hash(newPassword, 10);
+  await studentService.updateStudentPasswordHash(req.studentId, newHash);
+  return res.json({ message: 'Password updated. Use the new password next time you log in.' });
+}
+
 export async function uploadResume(req, res) {
   if (!req.file) {
-    return res.status(400).json({ error: 'Resume file required. Use PDF or DOC/DOCX (max 5MB).' });
+    const ct = req.headers['content-type'] || '';
+    console.warn('[resume] No file received. Content-Type:', ct ? ct.slice(0, 60) : '(none)');
+    return res.status(400).json({ error: 'Resume file required. Use PDF only (max 20MB).' });
   }
   const relativePath = path.basename(req.file.path);
   const user = await studentService.getStudentById(req.studentId);

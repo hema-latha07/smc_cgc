@@ -3,7 +3,7 @@ import bcrypt from 'bcrypt';
 import * as adminService from '../services/admin.service.js';
 import * as applicationService from '../services/application.service.js';
 import * as notificationService from '../utils/notifications.js';
-import { buildStudentsWorkbook, buildEventRegistrationsWorkbook, writeWorkbookToBuffer } from '../utils/excel.js';
+import { buildStudentsWorkbook, buildEventRegistrationsWorkbook, buildCompaniesWorkbook, buildDrivesWorkbook, buildPlacementReportWorkbook, writeWorkbookToBuffer } from '../utils/excel.js';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
@@ -81,10 +81,50 @@ export async function updateStudent(req, res) {
 
 export async function deleteStudent(req, res) {
   const id = parseInt(req.params.id, 10);
-  const ok = await adminService.deleteStudent(id);
+  const ok = await adminService.deleteStudent(id, req.adminId);
   if (!ok) return res.status(404).json({ error: 'Student not found' });
   await adminService.createAuditLog('ADMIN', req.adminId, 'STUDENT_DELETE', { studentId: id });
-  res.json({ message: 'Deleted' });
+  res.json({ message: 'Moved to recycle bin' });
+}
+
+export async function resetStudentPassword(req, res) {
+  const id = parseInt(req.params.id, 10);
+  const [rows] = await pool.query('SELECT id, deptNo, name FROM students WHERE id = ? AND deletedAt IS NULL', [id]);
+  const student = rows[0];
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  const tempPassword = Math.random().toString(36).slice(-10);
+  const hash = await bcrypt.hash(tempPassword, 10);
+  const ok = await adminService.resetStudentPassword(id, hash);
+  if (!ok) return res.status(400).json({ error: 'Could not reset password' });
+  await adminService.createAuditLog('ADMIN', req.adminId, 'STUDENT_PASSWORD_RESET', { studentId: id });
+  res.json({ message: 'Temporary password generated', tempPassword, deptNo: student.deptNo, name: student.name });
+}
+
+export async function exportStudents(req, res) {
+  const list = await adminService.listStudents({});
+  const columns = [
+    { header: 'Dept No', key: 'deptNo', width: 18 },
+    { header: 'Name', key: 'name', width: 22 },
+    { header: 'Department', key: 'department', width: 14 },
+    { header: 'CGPA', key: 'cgpa', width: 10 },
+    { header: 'Email', key: 'email', width: 28 },
+    { header: 'Phone', key: 'phone', width: 16 },
+    { header: 'Created At', key: 'createdAt', width: 20 },
+  ];
+  const rows = list.map((s) => ({
+    deptNo: s.deptNo,
+    name: s.name,
+    department: s.department,
+    cgpa: s.cgpa,
+    email: s.email,
+    phone: s.phone,
+    createdAt: s.createdAt,
+  }));
+  const wb = await buildStudentsWorkbook(rows, columns);
+  const buffer = await writeWorkbookToBuffer(wb);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename=students.xlsx');
+  res.send(buffer);
 }
 
 // Companies CRUD
@@ -96,6 +136,15 @@ export async function listCompanies(req, res) {
     adminService.countCompanies(filters),
   ]);
   res.json({ companies: list, totalCount });
+}
+
+export async function exportCompanies(req, res) {
+  const list = await adminService.listCompanies({});
+  const wb = await buildCompaniesWorkbook(list);
+  const buffer = await writeWorkbookToBuffer(wb);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename=companies.xlsx');
+  res.send(buffer);
 }
 
 export async function getCompany(req, res) {
@@ -123,16 +172,25 @@ export async function updateCompany(req, res) {
 
 export async function deleteCompany(req, res) {
   const id = parseInt(req.params.id, 10);
-  const ok = await adminService.deleteCompany(id);
+  const ok = await adminService.deleteCompany(id, req.adminId);
   if (!ok) return res.status(404).json({ error: 'Company not found' });
   await adminService.createAuditLog('ADMIN', req.adminId, 'COMPANY_DELETE', { companyId: id });
-  res.json({ message: 'Deleted' });
+  res.json({ message: 'Moved to recycle bin' });
 }
 
 // Drives CRUD
 export async function listDrives(req, res) {
   const list = await adminService.listDrives({ status: req.query.status });
   res.json({ drives: list });
+}
+
+export async function exportDrives(req, res) {
+  const list = await adminService.listDrives({});
+  const wb = await buildDrivesWorkbook(list);
+  const buffer = await writeWorkbookToBuffer(wb);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename=drives.xlsx');
+  res.send(buffer);
 }
 
 export async function getDrive(req, res) {
@@ -142,9 +200,31 @@ export async function getDrive(req, res) {
   res.json(drive);
 }
 
+function parseRoundsFromBody(body) {
+  if (Array.isArray(body.rounds)) {
+    if (body.rounds.length === 0) return [];
+    return body.rounds.map((r, i) => ({
+      roundNumber: r.roundNumber != null ? Number(r.roundNumber) : i + 1,
+      name: r.name || `Round ${(r.roundNumber != null ? r.roundNumber : i + 1)}`,
+      isFinal: !!r.isFinal,
+    }));
+  }
+  const count = parseInt(body.roundCount, 10);
+  if (!Number.isNaN(count) && count >= 0) {
+    if (count === 0) return [];
+    return Array.from({ length: count }, (_, i) => ({
+      roundNumber: i + 1,
+      name: `Round ${i + 1}`,
+      isFinal: i === count - 1,
+    }));
+  }
+  return undefined;
+}
+
 export async function createDrive(req, res) {
   const { companyId, role, ctc, eligibility, deadline, status, timelineStart, timelineEnd, minCgpa } = req.body;
   if (!companyId || !role) return res.status(400).json({ error: 'companyId and role required' });
+  const rounds = parseRoundsFromBody(req.body);
   const id = await adminService.createDrive({
     companyId: parseInt(companyId, 10),
     role,
@@ -155,6 +235,7 @@ export async function createDrive(req, res) {
     timelineStart: timelineStart || null,
     timelineEnd: timelineEnd || null,
     minCgpa: minCgpa != null && minCgpa !== '' ? parseFloat(minCgpa) : null,
+    rounds,
   });
   await adminService.createAuditLog('ADMIN', req.adminId, 'DRIVE_CREATE', { driveId: id, role });
   const studentIds = await adminService.getStudentIdsAll();
@@ -167,6 +248,7 @@ export async function updateDrive(req, res) {
   const body = { ...req.body };
   if (body.companyId !== undefined) body.companyId = parseInt(body.companyId, 10);
   if (body.minCgpa !== undefined) body.minCgpa = body.minCgpa === '' ? null : parseFloat(body.minCgpa);
+  body.rounds = parseRoundsFromBody(body);
   const ok = await adminService.updateDrive(id, body);
   if (!ok) return res.status(400).json({ error: 'No valid fields to update' });
   await adminService.createAuditLog('ADMIN', req.adminId, 'DRIVE_UPDATE', { driveId: id });
@@ -178,10 +260,42 @@ export async function updateDrive(req, res) {
 
 export async function deleteDrive(req, res) {
   const id = parseInt(req.params.id, 10);
-  const ok = await adminService.deleteDrive(id);
+  const ok = await adminService.deleteDrive(id, req.adminId);
   if (!ok) return res.status(404).json({ error: 'Drive not found' });
   await adminService.createAuditLog('ADMIN', req.adminId, 'DRIVE_DELETE', { driveId: id });
-  res.json({ message: 'Deleted' });
+  res.json({ message: 'Moved to recycle bin' });
+}
+
+// Round decision (PASS/FAIL) for current round — single
+export async function roundDecision(req, res) {
+  const id = parseInt(req.params.id, 10);
+  const { decision } = req.body;
+  if (!decision) return res.status(400).json({ error: 'decision required (PASS or FAIL)' });
+  const d = decision.toUpperCase();
+  if (d !== 'PASS' && d !== 'FAIL') return res.status(400).json({ error: 'decision must be PASS or FAIL' });
+  const result = await adminService.processRoundDecision(id, d);
+  if (!result.ok) return res.status(404).json({ error: result.error || 'Application not found' });
+  await adminService.createAuditLog('ADMIN', req.adminId, 'ROUND_DECISION', { applicationId: id, decision: d });
+  res.json({ message: 'Round decision applied' });
+}
+
+// Round decision bulk
+export async function roundDecisionBulk(req, res) {
+  const { applicationIds, decision } = req.body;
+  if (!Array.isArray(applicationIds) || applicationIds.length === 0 || !decision) {
+    return res.status(400).json({ error: 'applicationIds (array) and decision (PASS or FAIL) required' });
+  }
+  const d = decision.toUpperCase();
+  if (d !== 'PASS' && d !== 'FAIL') return res.status(400).json({ error: 'decision must be PASS or FAIL' });
+  let done = 0;
+  for (const id of applicationIds) {
+    const appId = parseInt(id, 10);
+    if (!appId) continue;
+    const result = await adminService.processRoundDecision(appId, d);
+    if (result.ok) done++;
+  }
+  await adminService.createAuditLog('ADMIN', req.adminId, 'ROUND_DECISION_BULK', { count: done, decision: d });
+  res.json({ message: 'Bulk round decision applied', count: done });
 }
 
 // Application status
@@ -215,6 +329,7 @@ export async function exportDriveStudents(req, res) {
     { header: 'Department', key: 'department', width: 14 },
     { header: 'CGPA', key: 'cgpa', width: 10 },
     { header: 'Email', key: 'email', width: 28 },
+    { header: 'Current Round', key: 'currentRoundName', width: 16 },
     { header: 'Status', key: 'status', width: 14 },
     { header: 'Applied At', key: 'appliedAt', width: 20 },
   ];
@@ -224,6 +339,7 @@ export async function exportDriveStudents(req, res) {
     department: s.department,
     cgpa: s.cgpa,
     email: s.email,
+    currentRoundName: s.currentRoundName ?? (s.currentRoundNumber != null ? `Round ${s.currentRoundNumber}` : ''),
     status: s.status,
     appliedAt: s.appliedAt,
   }));
@@ -279,15 +395,23 @@ export async function getEvent(req, res) {
 export async function createEvent(req, res) {
   const { type, driveId, title, startTime, endTime, location, description } = req.body;
   if (!type || !title || !startTime || !endTime) return res.status(400).json({ error: 'type, title, startTime, endTime required' });
-  const id = await adminService.createEvent({
-    type,
-    driveId: driveId ? parseInt(driveId, 10) : null,
-    title,
-    startTime,
-    endTime,
-    location,
-    description,
-  });
+  let id;
+  try {
+    id = await adminService.createEvent({
+      type,
+      driveId: driveId ? parseInt(driveId, 10) : null,
+      title,
+      startTime,
+      endTime,
+      location,
+      description,
+    });
+  } catch (err) {
+    if (err.code === 'EVENT_TIME_CONFLICT') {
+      return res.status(400).json({ error: err.message });
+    }
+    throw err;
+  }
   await adminService.createAuditLog('ADMIN', req.adminId, 'EVENT_CREATE', { eventId: id, title });
   const studentIds = await adminService.getStudentIdsAll();
   await notificationService.notifyStudents(studentIds, 'New event', title, '/student/events');
@@ -296,7 +420,15 @@ export async function createEvent(req, res) {
 
 export async function updateEvent(req, res) {
   const id = parseInt(req.params.id, 10);
-  const ok = await adminService.updateEvent(id, req.body);
+  let ok;
+  try {
+    ok = await adminService.updateEvent(id, req.body);
+  } catch (err) {
+    if (err.code === 'EVENT_TIME_CONFLICT') {
+      return res.status(400).json({ error: err.message });
+    }
+    throw err;
+  }
   if (!ok) return res.status(400).json({ error: 'No valid fields to update' });
   await adminService.createAuditLog('ADMIN', req.adminId, 'EVENT_UPDATE', { eventId: id });
   const event = await adminService.getEventById(id);
@@ -310,10 +442,10 @@ export async function updateEvent(req, res) {
 
 export async function deleteEvent(req, res) {
   const id = parseInt(req.params.id, 10);
-  const ok = await adminService.deleteEvent(id);
+  const ok = await adminService.deleteEvent(id, req.adminId);
   if (!ok) return res.status(404).json({ error: 'Event not found' });
   await adminService.createAuditLog('ADMIN', req.adminId, 'EVENT_DELETE', { eventId: id });
-  res.json({ message: 'Deleted' });
+  res.json({ message: 'Moved to recycle bin' });
 }
 
 export async function getEventRegistrations(req, res) {
@@ -369,6 +501,15 @@ export async function broadcastNotification(req, res) {
 export async function getPlacementReport(req, res) {
   const data = await adminService.getPlacementReport();
   res.json(data);
+}
+
+export async function exportPlacementReport(req, res) {
+  const data = await adminService.getPlacementReport();
+  const wb = await buildPlacementReportWorkbook(data);
+  const buffer = await writeWorkbookToBuffer(wb);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename=placement_report.xlsx');
+  res.send(buffer);
 }
 
 // Expiring offers (deadline in 48h)
@@ -510,6 +651,65 @@ export const bulkImportMulter = multer({
   }),
   limits: { fileSize: 10 * 1024 * 1024 },
 }).single('file');
+
+// Recycle bin: list deleted
+export async function listDeletedStudents(req, res) {
+  const list = await adminService.listDeletedStudents();
+  res.json({ students: list });
+}
+export async function listDeletedCompanies(req, res) {
+  const list = await adminService.listDeletedCompanies();
+  res.json({ companies: list });
+}
+export async function listDeletedDrives(req, res) {
+  const list = await adminService.listDeletedDrives();
+  res.json({ drives: list });
+}
+export async function listDeletedEvents(req, res) {
+  const list = await adminService.listDeletedEvents();
+  res.json({ events: list });
+}
+
+// Recycle bin: restore
+export async function restoreStudent(req, res) {
+  const id = parseInt(req.params.id, 10);
+  const ok = await adminService.restoreStudent(id);
+  if (!ok) return res.status(404).json({ error: 'Student not found or not deleted' });
+  await adminService.createAuditLog('ADMIN', req.adminId, 'STUDENT_RESTORE', { studentId: id });
+  res.json({ message: 'Restored' });
+}
+export async function restoreCompany(req, res) {
+  const id = parseInt(req.params.id, 10);
+  const ok = await adminService.restoreCompany(id);
+  if (!ok) return res.status(404).json({ error: 'Company not found or not deleted' });
+  await adminService.createAuditLog('ADMIN', req.adminId, 'COMPANY_RESTORE', { companyId: id });
+  res.json({ message: 'Restored' });
+}
+export async function restoreDrive(req, res) {
+  const id = parseInt(req.params.id, 10);
+  const ok = await adminService.restoreDrive(id);
+  if (!ok) return res.status(404).json({ error: 'Drive not found or not deleted' });
+  await adminService.createAuditLog('ADMIN', req.adminId, 'DRIVE_RESTORE', { driveId: id });
+  res.json({ message: 'Restored' });
+}
+export async function restoreEvent(req, res) {
+  const id = parseInt(req.params.id, 10);
+  const ok = await adminService.restoreEvent(id);
+  if (!ok) return res.status(404).json({ error: 'Event not found or not deleted' });
+  await adminService.createAuditLog('ADMIN', req.adminId, 'EVENT_RESTORE', { eventId: id });
+  res.json({ message: 'Restored' });
+}
+
+// Recycle bin: bulk soft delete
+export async function bulkDelete(req, res) {
+  const { entityType, ids } = req.body;
+  if (!entityType || !Array.isArray(ids)) return res.status(400).json({ error: 'entityType and ids (array) required' });
+  const allowed = ['students', 'companies', 'drives', 'events'];
+  if (!allowed.includes(entityType)) return res.status(400).json({ error: 'entityType must be students, companies, drives, or events' });
+  const result = await adminService.bulkSoftDelete(entityType, ids, req.adminId);
+  await adminService.createAuditLog('ADMIN', req.adminId, 'RECYCLE_BIN_BULK_DELETE', { entityType, deleted: result.deleted, requested: ids.length });
+  res.json({ deleted: result.deleted, errors: result.errors });
+}
 
 // Admin profile (change password)
 export async function updateAdminProfile(req, res) {

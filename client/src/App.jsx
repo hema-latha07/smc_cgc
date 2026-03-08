@@ -24,6 +24,7 @@ import AdminNotifications from './pages/admin/Notifications';
 import AdminChat from './pages/admin/Chat';
 import AdminPlacementReport from './pages/admin/PlacementReport';
 import AdminAuditLog from './pages/admin/AuditLog';
+import AdminRecycleBin from './pages/admin/RecycleBin';
 import AdminProfile from './pages/admin/AdminProfile';
 import AdminCompanyDetail from './pages/admin/CompanyDetail';
 
@@ -100,6 +101,7 @@ export default function App() {
         <Route path="chat" element={<AdminChat />} />
         <Route path="notifications" element={<AdminNotifications />} />
         <Route path="placement-report" element={<AdminPlacementReport />} />
+        <Route path="recycle-bin" element={<AdminRecycleBin />} />
         <Route path="audit-log" element={<AdminAuditLog />} />
         <Route path="profile" element={<AdminProfile />} />
       </Route>

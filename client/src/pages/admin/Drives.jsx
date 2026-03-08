@@ -14,23 +14,45 @@ async function downloadDriveExport(driveId) {
   URL.revokeObjectURL(url);
 }
 
+async function downloadDrivesListExport() {
+  try {
+    const { data } = await adminApi.get('/drives/export', { responseType: 'blob' });
+    const url = URL.createObjectURL(data);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'drives.xlsx';
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success('Export downloaded');
+  } catch (_) {
+    toast.error('Export failed');
+  }
+}
+
 export default function AdminDrives() {
   const [drives, setDrives] = useState([]);
   const [companies, setCompanies] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(null);
   const [statusFilter, setStatusFilter] = useState('');
   const [modal, setModal] = useState(null);
-  const [form, setForm] = useState({ companyId: '', role: '', ctc: '', eligibility: '', deadline: '', status: 'UPCOMING', timelineStart: '', timelineEnd: '', minCgpa: '' });
+  const [form, setForm] = useState({ companyId: '', role: '', ctc: '', eligibility: '', deadline: '', status: 'UPCOMING', timelineStart: '', timelineEnd: '', minCgpa: '', roundCount: 1, rounds: [{ roundNumber: 1, name: 'Round 1', isFinal: true }] });
 
   const fetch = () => {
     setLoading(true);
+    setFetchError(null);
     Promise.all([
       adminApi.get('/drives', { params: statusFilter ? { status: statusFilter } : {} }),
       adminApi.get('/companies'),
     ]).then(([dr, co]) => {
       setDrives(dr.data.drives || []);
       setCompanies(co.data.companies || []);
-    }).catch(() => {}).finally(() => setLoading(false));
+    }).catch((err) => {
+      setDrives([]);
+      setCompanies([]);
+      setFetchError(err.response?.status === 401 ? 'Please log in again' : 'Could not load drives. Is the backend running on port 5000?');
+      toast.error('Failed to load drives');
+    }).finally(() => setLoading(false));
   };
 
   useEffect(() => {
@@ -49,6 +71,8 @@ export default function AdminDrives() {
       if (payload.timelineStart === '') payload.timelineStart = null;
       if (payload.timelineEnd === '') payload.timelineEnd = null;
       if (payload.minCgpa === '') payload.minCgpa = null; else if (payload.minCgpa != null) payload.minCgpa = parseFloat(payload.minCgpa);
+      payload.rounds = (payload.rounds || []).map((r, i) => ({ roundNumber: i + 1, name: r.name || `Round ${i + 1}`, isFinal: i === (payload.rounds?.length || 1) - 1 }));
+      delete payload.roundCount;
       if (modal?.id) {
         await adminApi.patch(`/drives/${modal.id}`, payload);
         toast.success('Updated');
@@ -63,29 +87,26 @@ export default function AdminDrives() {
     }
   };
 
-  const remove = async (id) => {
-    if (!confirm('Delete this drive?')) return;
-    try {
-      await adminApi.delete(`/drives/${id}`);
-      toast.success('Deleted');
-      fetch();
-    } catch (e) {
-      toast.error(e.response?.data?.error || 'Failed');
-    }
-  };
-
-  const openEdit = (d) => {
+  const openEdit = async (d) => {
     setModal({ id: d.id });
+    let drive = d;
+    try {
+      const { data } = await adminApi.get(`/drives/${d.id}`);
+      drive = data;
+    } catch (_) {}
+    const rounds = drive.rounds?.length ? drive.rounds.map((r) => ({ roundNumber: r.roundNumber, name: r.name, isFinal: !!r.isFinal })) : [{ roundNumber: 1, name: 'Round 1', isFinal: true }];
     setForm({
-      companyId: String(d.companyId),
-      role: d.role,
-      ctc: d.ctc ?? '',
-      eligibility: d.eligibility ?? '',
-      deadline: d.deadline ? d.deadline.slice(0, 16) : '',
-      status: d.status,
-      timelineStart: d.timelineStart ? d.timelineStart.slice(0, 16) : '',
-      timelineEnd: d.timelineEnd ? d.timelineEnd.slice(0, 16) : '',
-      minCgpa: d.minCgpa != null ? String(d.minCgpa) : '',
+      companyId: String(drive.companyId),
+      role: drive.role,
+      ctc: drive.ctc ?? '',
+      eligibility: drive.eligibility ?? '',
+      deadline: drive.deadline ? drive.deadline.slice(0, 16) : '',
+      status: drive.status,
+      timelineStart: drive.timelineStart ? drive.timelineStart.slice(0, 16) : '',
+      timelineEnd: drive.timelineEnd ? drive.timelineEnd.slice(0, 16) : '',
+      minCgpa: drive.minCgpa != null ? String(drive.minCgpa) : '',
+      roundCount: rounds.length,
+      rounds,
     });
   };
 
@@ -96,7 +117,10 @@ export default function AdminDrives() {
           <h1 className="text-2xl font-bold text-slate-800">Drives</h1>
           <p className="text-slate-500 mt-1">Create and manage placement drives</p>
         </div>
-        <button onClick={() => { setModal({}); setForm({ companyId: '', role: '', ctc: '', eligibility: '', deadline: '', status: 'UPCOMING', timelineStart: '', timelineEnd: '', minCgpa: '' }); }} className="btn-primary">Create drive</button>
+        <div className="flex gap-2">
+          <button onClick={downloadDrivesListExport} className="btn-secondary">Export Excel (all drives)</button>
+          <button onClick={() => { setModal({}); setForm({ companyId: '', role: '', ctc: '', eligibility: '', deadline: '', status: 'UPCOMING', timelineStart: '', timelineEnd: '', minCgpa: '', roundCount: 1, rounds: [{ roundNumber: 1, name: 'Round 1', isFinal: true }] }); }} className="btn-primary">Create drive</button>
+        </div>
       </div>
       <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="px-4 py-2 rounded-lg border border-slate-200">
         <option value="">All statuses</option>
@@ -104,6 +128,12 @@ export default function AdminDrives() {
         <option value="ONGOING">Ongoing</option>
         <option value="COMPLETED">Completed</option>
       </select>
+      {fetchError && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 flex items-center justify-between gap-4">
+          <p className="text-amber-800 text-sm">{fetchError}</p>
+          <button type="button" onClick={() => fetch()} className="text-amber-700 font-medium hover:underline text-sm">Retry</button>
+        </div>
+      )}
       <div className="bg-white rounded-xl border border-slate-100 overflow-hidden shadow-sm">
         {loading ? (
           <TableSkeleton rows={5} cols={6} />
@@ -114,7 +144,7 @@ export default function AdminDrives() {
             </div>
             <p className="text-slate-500 font-medium">No drives yet</p>
             <p className="text-slate-400 text-sm mt-1">Create a drive to start collecting applications</p>
-            <button onClick={() => { setModal({}); setForm({ companyId: '', role: '', ctc: '', eligibility: '', deadline: '', status: 'UPCOMING', timelineStart: '', timelineEnd: '', minCgpa: '' }); }} className="mt-4 btn-primary">Create drive</button>
+            <button onClick={() => { setModal({}); setForm({ companyId: '', role: '', ctc: '', eligibility: '', deadline: '', status: 'UPCOMING', timelineStart: '', timelineEnd: '', minCgpa: '', roundCount: 1, rounds: [{ roundNumber: 1, name: 'Round 1', isFinal: true }] }); }} className="mt-4 btn-primary">Create drive</button>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -141,7 +171,6 @@ export default function AdminDrives() {
                       <Link to={`/admin/drives/${d.id}/students`} className="text-primary-600 text-sm font-medium mr-3 hover:underline">Students</Link>
                       <button type="button" onClick={() => downloadDriveExport(d.id)} className="text-primary-600 text-sm font-medium mr-3 hover:underline">Export</button>
                       <button onClick={() => openEdit(d)} className="text-primary-600 text-sm font-medium mr-3 hover:underline">Edit</button>
-                      <button onClick={() => remove(d.id)} className="text-red-600 text-sm font-medium hover:underline">Delete</button>
                     </td>
                   </tr>
                 ))}
@@ -174,6 +203,38 @@ export default function AdminDrives() {
               </select>
               <input type="datetime-local" placeholder="Timeline start" value={form.timelineStart} onChange={(e) => setForm((f) => ({ ...f, timelineStart: e.target.value }))} className="w-full px-4 py-2 rounded-lg border border-slate-200" />
               <input type="datetime-local" placeholder="Timeline end" value={form.timelineEnd} onChange={(e) => setForm((f) => ({ ...f, timelineEnd: e.target.value }))} className="w-full px-4 py-2 rounded-lg border border-slate-200" />
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Placement rounds</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={form.roundCount}
+                  onChange={(e) => {
+                    const n = Math.max(1, Math.min(10, parseInt(e.target.value, 10) || 1));
+                    setForm((f) => ({
+                      ...f,
+                      roundCount: n,
+                      rounds: Array.from({ length: n }, (_, i) =>
+                        f.rounds[i] || { roundNumber: i + 1, name: `Round ${i + 1}`, isFinal: i === n - 1 }
+                      ),
+                    }));
+                  }}
+                  className="w-full px-4 py-2 rounded-lg border border-slate-200"
+                />
+                <p className="text-xs text-slate-500 mt-0.5">Number of selection rounds (e.g. 3 for Round 1, 2, 3). Last round is final.</p>
+                {form.rounds?.length > 0 && (
+                  <div className="mt-2 space-y-2">
+                    {form.rounds.map((r, i) => (
+                      <div key={i} className="flex gap-2 items-center">
+                        <span className="text-slate-500 w-16">Round {i + 1}</span>
+                        <input type="text" value={r.name} onChange={(e) => setForm((f) => ({ ...f, rounds: f.rounds.map((x, j) => j === i ? { ...x, name: e.target.value } : x) }))} placeholder={`Round ${i + 1}`} className="flex-1 px-3 py-1.5 rounded border border-slate-200 text-sm" />
+                        {i === form.rounds.length - 1 && <span className="text-xs text-slate-500">(final)</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
               <div className="flex gap-2 pt-2">
                 <button type="submit" className="btn-primary flex-1">Save</button>
                 <button type="button" onClick={() => setModal(null)} className="btn-secondary">Cancel</button>

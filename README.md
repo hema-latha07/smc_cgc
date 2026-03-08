@@ -33,9 +33,10 @@ DB_USER=root
 DB_PASSWORD=your_mysql_password
 DB_NAME=smc_career_connect
 JWT_SECRET=your-secret-key-change-in-production
+ALLOWED_ORIGIN=http://localhost:3000
 ```
 
-Optional for client: create `client/.env` and set `VITE_API_URL=` (leave empty when using Vite proxy to backend).
+Optional for client: create `client/.env` and set `VITE_API_URL=` (leave empty when using Vite proxy to backend). In production, set `VITE_API_URL` to the deployed API base URL.
 
 ## Run the project
 

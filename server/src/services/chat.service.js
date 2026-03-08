@@ -1,12 +1,12 @@
 import pool from '../db/pool.js';
 
-/** Students can access a room if they have applied to any drive of that company */
+/** Students can access a room only if they have an active application (not rejected) for that company */
 export async function getRoomIdsForStudent(studentId) {
   const [rows] = await pool.query(
     `SELECT DISTINCT cr.id AS roomId
      FROM chat_rooms cr
      INNER JOIN drives d ON d.companyId = cr.companyId
-     INNER JOIN applications a ON a.driveId = d.id AND a.studentId = ?
+     INNER JOIN applications a ON a.driveId = d.id AND a.studentId = ? AND a.status IN ('APPLIED', 'SHORTLISTED', 'SELECTED')
      ORDER BY cr.id`,
     [studentId]
   );
@@ -167,7 +167,7 @@ export async function studentCanAccessRoom(studentId, roomId) {
   const [rows] = await pool.query(
     `SELECT 1 FROM chat_rooms cr
      INNER JOIN drives d ON d.companyId = cr.companyId
-     INNER JOIN applications a ON a.driveId = d.id AND a.studentId = ?
+     INNER JOIN applications a ON a.driveId = d.id AND a.studentId = ? AND a.status IN ('APPLIED', 'SHORTLISTED', 'SELECTED')
      WHERE cr.id = ?`,
     [studentId, roomId]
   );
@@ -208,13 +208,13 @@ export async function markSeen(roomId, userType, userId) {
   );
 }
 
-/** Student IDs that have applied to any drive of this room's company */
+/** Student IDs that have an active application (not rejected) for this room's company */
 export async function getStudentIdsInRoom(roomId) {
   const [rows] = await pool.query(
     `SELECT DISTINCT a.studentId FROM applications a
      INNER JOIN drives d ON d.id = a.driveId
      INNER JOIN chat_rooms cr ON cr.companyId = d.companyId
-     WHERE cr.id = ?`,
+     WHERE cr.id = ? AND a.status IN ('APPLIED', 'SHORTLISTED', 'SELECTED')`,
     [roomId]
   );
   return rows.map((r) => r.studentId);

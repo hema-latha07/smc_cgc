@@ -45,11 +45,35 @@ export async function canStudentApply(studentId) {
 }
 
 export async function createApplication(studentId, driveId) {
-  const [r] = await pool.query(
-    'INSERT INTO applications (studentId, driveId, status) VALUES (?, ?, ?)',
-    [studentId, driveId, 'APPLIED']
-  );
-  return r.insertId;
+  let applicationId;
+  try {
+    const [r] = await pool.query(
+      'INSERT INTO applications (studentId, driveId, status, currentRoundNumber) VALUES (?, ?, ?, 1)',
+      [studentId, driveId, 'APPLIED']
+    );
+    applicationId = r.insertId;
+  } catch (err) {
+    const [r] = await pool.query(
+      'INSERT INTO applications (studentId, driveId, status) VALUES (?, ?, ?)',
+      [studentId, driveId, 'APPLIED']
+    );
+    applicationId = r.insertId;
+  }
+  try {
+    const [rounds] = await pool.query(
+      'SELECT id FROM drive_rounds WHERE driveId = ? ORDER BY roundNumber ASC',
+      [driveId]
+    );
+    for (const row of rounds) {
+      await pool.query(
+        'INSERT INTO application_rounds (applicationId, roundId, status) VALUES (?, ?, ?)',
+        [applicationId, row.id, 'PENDING']
+      );
+    }
+  } catch (_) {
+    // drive_rounds table may not exist yet
+  }
+  return applicationId;
 }
 
 export async function getApplicationByStudentAndDrive(studentId, driveId) {

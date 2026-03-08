@@ -8,6 +8,8 @@ export default function StudentDrives() {
   const navigate = useNavigate();
   const [data, setData] = useState({ drives: [], canApply: true, canApplyReason: null });
   const [loading, setLoading] = useState(true);
+  const [statusFilter, setStatusFilter] = useState('');
+  const [search, setSearch] = useState('');
 
   useEffect(() => {
     studentApi.get('/drives').then(({ data: d }) => setData(d)).catch(() => {}).finally(() => setLoading(false));
@@ -36,6 +38,16 @@ export default function StudentDrives() {
     );
   }
 
+  const filteredDrives = data.drives.filter((d) => {
+    if (statusFilter && d.status !== statusFilter) return false;
+    if (search) {
+      const term = search.toLowerCase();
+      const text = `${d.companyName || ''} ${d.role || ''}`.toLowerCase();
+      if (!text.includes(term)) return false;
+    }
+    return true;
+  });
+
   return (
     <div className="space-y-6 animate-fade-in">
       <div>
@@ -47,17 +59,40 @@ export default function StudentDrives() {
           {data.canApplyReason}
         </div>
       )}
+      <div className="flex flex-wrap items-center gap-3">
+        <input
+          type="text"
+          placeholder="Search by company or role"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="px-4 py-2 rounded-lg border border-slate-200 w-full sm:w-64"
+        />
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          className="px-4 py-2 rounded-lg border border-slate-200 w-full sm:w-48"
+        >
+          <option value="">All statuses</option>
+          <option value="UPCOMING">Upcoming</option>
+          <option value="ONGOING">Ongoing</option>
+          <option value="COMPLETED">Completed</option>
+        </select>
+      </div>
+
       <div className="grid gap-4">
-        {data.drives.length === 0 ? (
+        {filteredDrives.length === 0 ? (
           <div className="bg-white rounded-xl border border-slate-100 p-8 text-center text-slate-500">No drives available.</div>
         ) : (
-          data.drives.map((d) => (
+          filteredDrives.map((d) => (
             <div key={d.id} className="bg-white rounded-xl border border-slate-100 p-6 shadow-sm card-hover flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
                 <h3 className="font-semibold text-slate-800">{d.companyName} – {d.role}</h3>
                 <p className="text-sm text-slate-500 mt-1">CTC: {d.ctc || '—'} · Status: {d.status}</p>
                 <p className="text-sm text-slate-600 mt-1">{d.eligibility || '—'}</p>
                 <p className="text-xs text-slate-400 mt-1">Deadline: {d.deadline ? new Date(d.deadline).toLocaleString() : '—'}</p>
+                {!data.canApply && data.canApplyReason && !d.applicationStatus && (
+                  <p className="text-xs text-amber-600 mt-1">You cannot apply: {data.canApplyReason}</p>
+                )}
               </div>
               <div>
                 {d.applicationStatus ? (

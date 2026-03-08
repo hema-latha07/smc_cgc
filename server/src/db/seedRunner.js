@@ -23,7 +23,19 @@ async function run() {
        ON DUPLICATE KEY UPDATE dob_hash = VALUES(dob_hash)`,
       [dobHash]
     );
-    console.log('Seed runner: admin (admin/admin123) and student (23/UCSA/101 / 25/02/2005) ready.');
+    await pool.query(
+      `INSERT INTO companies (name, industry, contactPerson, contactEmail, contactPhone, jobDescription, salaryPackage)
+       VALUES ('TechCorp Solutions', 'IT', 'John Doe', 'john@techcorp.com', '9876543210', 'Software Engineer role', '8 LPA')`
+    );
+    const [rows] = await pool.query('SELECT id FROM companies WHERE name = ? LIMIT 1', ['TechCorp Solutions']);
+    const companyId = rows?.[0]?.id ?? 1;
+    await pool.query(
+      `INSERT INTO drives (companyId, role, ctc, eligibility, deadline, status, timelineStart, timelineEnd)
+       VALUES (?, 'Software Engineer', '8 LPA', 'CGPA >= 7.5, CSE/IT', DATE_ADD(NOW(), INTERVAL 30 DAY), 'UPCOMING', DATE_ADD(NOW(), INTERVAL 25 DAY), DATE_ADD(NOW(), INTERVAL 35 DAY))
+       ON DUPLICATE KEY UPDATE role = VALUES(role)`,
+      [companyId]
+    );
+    console.log('Seed runner: admin (admin/admin123), student (23/UCSA/101 / 25/02/2005), 1 company, 1 drive ready.');
   } catch (e) {
     console.error('Seed runner error:', e.message);
   } finally {

@@ -1,4 +1,5 @@
 import pool from '../db/pool.js';
+import * as notificationService from '../utils/notifications.js';
 
 export async function getDashboard() {
   const [
@@ -11,16 +12,17 @@ export async function getDashboard() {
     [{ firstDriveIdWithPending }],
     [{ drivesClosingSoonCount }],
   ] = await Promise.all([
-    pool.query('SELECT COUNT(*) AS totalStudents FROM students'),
+    pool.query('SELECT COUNT(*) AS totalStudents FROM students WHERE deletedAt IS NULL'),
     pool.query(
       `SELECT COUNT(DISTINCT a.studentId) AS placed FROM applications a WHERE a.status = 'SELECTED'`
     ),
     pool.query('SELECT COUNT(*) AS pendingApps FROM applications WHERE status IN (\'APPLIED\', \'SHORTLISTED\')'),
-    pool.query('SELECT COUNT(*) AS upcomingDrives FROM drives WHERE status IN (\'UPCOMING\', \'ONGOING\') AND deadline >= NOW()'),
+    pool.query('SELECT COUNT(*) AS upcomingDrives FROM drives WHERE deletedAt IS NULL AND status IN (\'UPCOMING\', \'ONGOING\') AND deadline >= NOW()'),
     pool.query(
       `SELECT c.name, COUNT(a.id) AS count FROM companies c
-       LEFT JOIN drives d ON d.companyId = c.id
+       LEFT JOIN drives d ON d.companyId = c.id AND d.deletedAt IS NULL
        LEFT JOIN applications a ON a.driveId = d.id AND a.status = 'SELECTED'
+       WHERE c.deletedAt IS NULL
        GROUP BY c.id ORDER BY count DESC LIMIT 5`
     ),
     pool.query(
@@ -33,15 +35,16 @@ export async function getDashboard() {
     ),
     pool.query(
       `SELECT COUNT(*) AS drivesClosingSoonCount FROM drives
-       WHERE status IN ('UPCOMING', 'ONGOING') AND deadline >= NOW() AND deadline <= DATE_ADD(NOW(), INTERVAL 7 DAY)`
+       WHERE deletedAt IS NULL AND status IN ('UPCOMING', 'ONGOING') AND deadline >= NOW() AND deadline <= DATE_ADD(NOW(), INTERVAL 7 DAY)`
     ),
   ]);
+  const topCompaniesList = Array.isArray(topCompanies[0]) ? topCompanies[0] : (topCompanies[0] ? [topCompanies[0]] : []);
   return {
     totalStudents: totalStudents || 0,
     placed: placed || 0,
     pendingApplications: pendingApps || 0,
     upcomingDrives: upcomingDrives || 0,
-    topCompanies: topCompanies[0] || [],
+    topCompanies: topCompaniesList,
     expiringOffersCount: expiringOffersCount || 0,
     firstDriveIdWithPending: firstDriveIdWithPending?.firstDriveIdWithPending ?? null,
     drivesClosingSoonCount: drivesClosingSoonCount || 0,
@@ -49,7 +52,7 @@ export async function getDashboard() {
 }
 
 function _studentsWhereClause(filters) {
-  let sql = ' FROM students WHERE 1=1';
+  let sql = ' FROM students WHERE deletedAt IS NULL';
   const params = [];
   if (filters.department) {
     sql += ' AND department = ?';
@@ -87,7 +90,7 @@ export async function listStudents(filters = {}) {
 
 export async function getStudentById(id) {
   const [rows] = await pool.query(
-    'SELECT id, deptNo, name, department, cgpa, email, phone, createdAt FROM students WHERE id = ?',
+    'SELECT id, deptNo, name, department, cgpa, email, phone, createdAt FROM students WHERE id = ? AND deletedAt IS NULL',
     [id]
   );
   return rows[0];
@@ -116,13 +119,16 @@ export async function updateStudent(id, data) {
   return r.affectedRows > 0;
 }
 
-export async function deleteStudent(id) {
-  const [r] = await pool.query('DELETE FROM students WHERE id = ?', [id]);
+export async function deleteStudent(id, adminId = null) {
+  const [r] = await pool.query(
+    'UPDATE students SET deletedAt = NOW(), deletedBy = ? WHERE id = ? AND deletedAt IS NULL',
+    [adminId ?? null, id]
+  );
   return r.affectedRows > 0;
 }
 
 function _companiesWhereClause(filters) {
-  let sql = ' FROM companies WHERE 1=1';
+  let sql = ' FROM companies WHERE deletedAt IS NULL';
   const params = [];
   if (filters.search) {
     sql += ' AND (name LIKE ? OR industry LIKE ?)';
@@ -155,7 +161,7 @@ export async function listCompanies(filters = {}) {
 }
 
 export async function getCompanyById(id) {
-  const [rows] = await pool.query('SELECT * FROM companies WHERE id = ?', [id]);
+  const [rows] = await pool.query('SELECT * FROM companies WHERE id = ? AND deletedAt IS NULL', [id]);
   return rows[0];
 }
 
@@ -193,13 +199,16 @@ export async function updateCompany(id, data) {
   return r.affectedRows > 0;
 }
 
-export async function deleteCompany(id) {
-  const [r] = await pool.query('DELETE FROM companies WHERE id = ?', [id]);
+export async function deleteCompany(id, adminId = null) {
+  const [r] = await pool.query(
+    'UPDATE companies SET deletedAt = NOW(), deletedBy = ? WHERE id = ? AND deletedAt IS NULL',
+    [adminId ?? null, id]
+  );
   return r.affectedRows > 0;
 }
 
 export async function listDrives(filters = {}) {
-  let sql = `SELECT d.*, c.name AS companyName FROM drives d JOIN companies c ON c.id = d.companyId WHERE 1=1`;
+  let sql = `SELECT d.*, c.name AS companyName FROM drives d JOIN companies c ON c.id = d.companyId AND c.deletedAt IS NULL WHERE d.deletedAt IS NULL`;
   const params = [];
   if (filters.status) {
     sql += ' AND d.status = ?';
@@ -210,12 +219,43 @@ export async function listDrives(filters = {}) {
   return rows;
 }
 
+export async function getDriveRounds(driveId) {
+  const [rows] = await pool.query(
+    'SELECT id, driveId, roundNumber, name, isFinal FROM drive_rounds WHERE driveId = ? ORDER BY roundNumber ASC',
+    [driveId]
+  );
+  return rows;
+}
+
 export async function getDriveById(id) {
   const [rows] = await pool.query(
-    'SELECT d.*, c.name AS companyName, c.industry FROM drives d JOIN companies c ON c.id = d.companyId WHERE d.id = ?',
+    'SELECT d.*, c.name AS companyName, c.industry FROM drives d JOIN companies c ON c.id = d.companyId AND c.deletedAt IS NULL WHERE d.id = ? AND d.deletedAt IS NULL',
     [id]
   );
-  return rows[0];
+  const drive = rows[0];
+  if (drive) {
+    try {
+      drive.rounds = await getDriveRounds(id);
+    } catch (_) {
+      drive.rounds = [];
+    }
+  }
+  return drive;
+}
+
+export async function createDriveRounds(driveId, rounds) {
+  if (!rounds?.length) return;
+  for (const r of rounds) {
+    await pool.query(
+      'INSERT INTO drive_rounds (driveId, roundNumber, name, isFinal) VALUES (?, ?, ?, ?)',
+      [driveId, r.roundNumber, r.name || `Round ${r.roundNumber}`, r.isFinal ? 1 : 0]
+    );
+  }
+}
+
+export async function updateDriveRounds(driveId, rounds) {
+  await pool.query('DELETE FROM drive_rounds WHERE driveId = ?', [driveId]);
+  if (rounds?.length) await createDriveRounds(driveId, rounds);
 }
 
 export async function createDrive(data) {
@@ -234,7 +274,11 @@ export async function createDrive(data) {
       data.minCgpa ?? null,
     ]
   );
-  return r.insertId;
+  const driveId = r.insertId;
+  try {
+    if (data.rounds?.length) await createDriveRounds(driveId, data.rounds);
+  } catch (_) {}
+  return driveId;
 }
 
 export async function updateDrive(id, data) {
@@ -246,26 +290,51 @@ export async function updateDrive(id, data) {
       values.push(data[f]);
     }
   });
-  if (fields.length === 0) return false;
-  values.push(id);
-  const [r] = await pool.query(`UPDATE drives SET ${fields.join(', ')} WHERE id = ?`, values);
-  return r.affectedRows > 0;
+  if (fields.length > 0) {
+    values.push(id);
+    const [r] = await pool.query(`UPDATE drives SET ${fields.join(', ')} WHERE id = ?`, values);
+    if (r.affectedRows === 0) return false;
+  }
+  try {
+    if (data.rounds !== undefined) await updateDriveRounds(id, data.rounds || []);
+  } catch (_) {}
+  return true;
 }
 
-export async function deleteDrive(id) {
-  const [r] = await pool.query('DELETE FROM drives WHERE id = ?', [id]);
+export async function deleteDrive(id, adminId = null) {
+  const [r] = await pool.query(
+    'UPDATE drives SET deletedAt = NOW(), deletedBy = ? WHERE id = ? AND deletedAt IS NULL',
+    [adminId ?? null, id]
+  );
   return r.affectedRows > 0;
 }
 
 export async function getDriveByIdWithEligibility(id) {
-  const [rows] = await pool.query('SELECT id, minCgpa, eligibility FROM drives WHERE id = ?', [id]);
-  return rows[0];
+  try {
+    const [rows] = await pool.query('SELECT id, minCgpa, eligibility FROM drives WHERE id = ?', [id]);
+    return rows[0];
+  } catch (err) {
+    if (err.code === 'ER_BAD_FIELD_ERROR' && err.message?.includes('minCgpa')) {
+      const [rows] = await pool.query('SELECT id, eligibility FROM drives WHERE id = ?', [id]);
+      return rows[0] ? { ...rows[0], minCgpa: null } : null;
+    }
+    throw err;
+  }
 }
 
 /** Returns { eligible: boolean, reason?: string } */
 export async function checkEligible(studentId, driveId) {
   const [student] = await pool.query('SELECT cgpa, department FROM students WHERE id = ?', [studentId]);
-  const [drive] = await pool.query('SELECT minCgpa, eligibility FROM drives WHERE id = ?', [driveId]);
+  let drive;
+  try {
+    const [rows] = await pool.query('SELECT minCgpa, eligibility FROM drives WHERE id = ?', [driveId]);
+    drive = rows;
+  } catch (err) {
+    if (err.code === 'ER_BAD_FIELD_ERROR' && err.message?.includes('minCgpa')) {
+      const [rows] = await pool.query('SELECT eligibility FROM drives WHERE id = ?', [driveId]);
+      drive = rows?.[0] ? [{ ...rows[0], minCgpa: null }] : [];
+    } else throw err;
+  }
   if (!student?.[0] || !drive?.[0]) return { eligible: false, reason: 'Student or drive not found' };
   const s = student[0];
   const d = drive[0];
@@ -279,7 +348,7 @@ export async function checkEligible(studentId, driveId) {
 }
 
 export async function getDriveStudents(driveId, status) {
-  let sql = `SELECT a.id AS applicationId, a.status, a.appliedAt, a.updatedAt,
+  let sql = `SELECT a.id AS applicationId, a.status, a.appliedAt, a.updatedAt, a.currentRoundNumber,
              s.id AS studentId, s.deptNo, s.name, s.department, s.cgpa, s.email, s.phone
              FROM applications a
              JOIN students s ON s.id = a.studentId
@@ -293,18 +362,25 @@ export async function getDriveStudents(driveId, status) {
   const [rows] = await pool.query(sql, params);
   const driveElig = await getDriveByIdWithEligibility(driveId);
   const minCgpa = driveElig?.minCgpa != null ? parseFloat(driveElig.minCgpa) : null;
+  let roundNames = {};
+  try {
+    const rounds = await getDriveRounds(driveId);
+    rounds.forEach((r) => { roundNames[r.roundNumber] = r.name; });
+  } catch (_) {}
   return rows.map((r) => {
     let eligible = null;
     if (minCgpa != null) {
       const cgpa = r.cgpa != null ? parseFloat(r.cgpa) : null;
       eligible = cgpa != null && cgpa >= minCgpa;
     }
-    return { ...r, eligible };
+    const currentRoundNumber = r.currentRoundNumber != null ? Number(r.currentRoundNumber) : null;
+    const currentRoundName = currentRoundNumber != null ? (roundNames[currentRoundNumber] || `Round ${currentRoundNumber}`) : null;
+    return { ...r, eligible, currentRoundNumber, currentRoundName };
   });
 }
 
 export async function listEvents(filters = {}) {
-  let sql = 'SELECT e.*, d.role AS driveRole, c.name AS companyName FROM events e LEFT JOIN drives d ON d.id = e.driveId LEFT JOIN companies c ON c.id = d.companyId WHERE 1=1';
+  let sql = 'SELECT e.*, d.role AS driveRole, c.name AS companyName FROM events e LEFT JOIN drives d ON d.id = e.driveId AND d.deletedAt IS NULL LEFT JOIN companies c ON c.id = d.companyId AND c.deletedAt IS NULL WHERE e.deletedAt IS NULL';
   const params = [];
   if (filters.type) {
     sql += ' AND e.type = ?';
@@ -317,13 +393,25 @@ export async function listEvents(filters = {}) {
 
 export async function getEventById(id) {
   const [rows] = await pool.query(
-    'SELECT e.*, d.role AS driveRole, c.name AS companyName FROM events e LEFT JOIN drives d ON d.id = e.driveId LEFT JOIN companies c ON c.id = d.companyId WHERE e.id = ?',
+    'SELECT e.*, d.role AS driveRole, c.name AS companyName FROM events e LEFT JOIN drives d ON d.id = e.driveId LEFT JOIN companies c ON c.id = d.companyId WHERE e.id = ? AND e.deletedAt IS NULL',
     [id]
   );
   return rows[0];
 }
 
 export async function createEvent(data) {
+  // Prevent events clashing at the exact same start time (ignores soft-deleted events)
+  if (data.startTime) {
+    const [existing] = await pool.query(
+      'SELECT id FROM events WHERE deletedAt IS NULL AND startTime = ?',
+      [data.startTime]
+    );
+    if (existing.length) {
+      const err = new Error('Another event is already scheduled at this date and time. Please choose a different slot.');
+      err.code = 'EVENT_TIME_CONFLICT';
+      throw err;
+    }
+  }
   const [r] = await pool.query(
     `INSERT INTO events (type, driveId, title, startTime, endTime, location, description)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -341,6 +429,21 @@ export async function createEvent(data) {
 }
 
 export async function updateEvent(id, data) {
+  // Load current event to check for time clashes when updating
+  const current = await getEventById(id);
+  if (!current) return false;
+  const nextStartTime = data.startTime ?? current.startTime;
+  if (nextStartTime) {
+    const [existing] = await pool.query(
+      'SELECT id FROM events WHERE deletedAt IS NULL AND startTime = ? AND id <> ?',
+      [nextStartTime, id]
+    );
+    if (existing.length) {
+      const err = new Error('Another event is already scheduled at this date and time. Please choose a different slot.');
+      err.code = 'EVENT_TIME_CONFLICT';
+      throw err;
+    }
+  }
   const fields = [];
   const values = [];
   ['type', 'driveId', 'title', 'startTime', 'endTime', 'location', 'description'].forEach((f) => {
@@ -355,9 +458,93 @@ export async function updateEvent(id, data) {
   return r.affectedRows > 0;
 }
 
-export async function deleteEvent(id) {
-  const [r] = await pool.query('DELETE FROM events WHERE id = ?', [id]);
+export async function deleteEvent(id, adminId = null) {
+  const [r] = await pool.query(
+    'UPDATE events SET deletedAt = NOW(), deletedBy = ? WHERE id = ? AND deletedAt IS NULL',
+    [adminId ?? null, id]
+  );
   return r.affectedRows > 0;
+}
+
+// ——— Recycle bin: list deleted ———
+export async function listDeletedStudents() {
+  const [rows] = await pool.query(
+    'SELECT id, deptNo, name, department, email, deletedAt, deletedBy FROM students WHERE deletedAt IS NOT NULL ORDER BY deletedAt DESC'
+  );
+  return rows;
+}
+
+export async function listDeletedCompanies() {
+  const [rows] = await pool.query(
+    'SELECT id, name, industry, contactEmail, deletedAt, deletedBy FROM companies WHERE deletedAt IS NOT NULL ORDER BY deletedAt DESC'
+  );
+  return rows;
+}
+
+export async function listDeletedDrives() {
+  const [rows] = await pool.query(
+    `SELECT d.id, d.role, d.deadline, d.status, d.deletedAt, d.deletedBy, c.name AS companyName
+     FROM drives d LEFT JOIN companies c ON c.id = d.companyId WHERE d.deletedAt IS NOT NULL ORDER BY d.deletedAt DESC`
+  );
+  return rows;
+}
+
+export async function listDeletedEvents() {
+  const [rows] = await pool.query(
+    `SELECT e.id, e.title, e.type, e.startTime, e.deletedAt, e.deletedBy, d.role AS driveRole, c.name AS companyName
+     FROM events e LEFT JOIN drives d ON d.id = e.driveId LEFT JOIN companies c ON c.id = d.companyId
+     WHERE e.deletedAt IS NOT NULL ORDER BY e.deletedAt DESC`
+  );
+  return rows;
+}
+
+// ——— Recycle bin: restore ———
+export async function restoreStudent(id) {
+  const [r] = await pool.query('UPDATE students SET deletedAt = NULL, deletedBy = NULL WHERE id = ? AND deletedAt IS NOT NULL', [id]);
+  return r.affectedRows > 0;
+}
+
+export async function restoreCompany(id) {
+  const [r] = await pool.query('UPDATE companies SET deletedAt = NULL, deletedBy = NULL WHERE id = ? AND deletedAt IS NOT NULL', [id]);
+  return r.affectedRows > 0;
+}
+
+export async function restoreDrive(id) {
+  const [r] = await pool.query('UPDATE drives SET deletedAt = NULL, deletedBy = NULL WHERE id = ? AND deletedAt IS NOT NULL', [id]);
+  return r.affectedRows > 0;
+}
+
+export async function restoreEvent(id) {
+  const [r] = await pool.query('UPDATE events SET deletedAt = NULL, deletedBy = NULL WHERE id = ? AND deletedAt IS NOT NULL', [id]);
+  return r.affectedRows > 0;
+}
+
+// ——— Recycle bin: bulk soft delete ———
+export async function bulkSoftDelete(entityType, ids, adminId) {
+  if (!Array.isArray(ids) || ids.length === 0) return { deleted: 0, errors: [] };
+  const errors = [];
+  let deleted = 0;
+  const table = { students: 'students', companies: 'companies', drives: 'drives', events: 'events' }[entityType];
+  if (!table) return { deleted: 0, errors: [{ message: 'Invalid entityType' }] };
+  for (const id of ids) {
+    const numId = parseInt(id, 10);
+    if (Number.isNaN(numId)) {
+      errors.push({ id, message: 'Invalid id' });
+      continue;
+    }
+    try {
+      let ok = false;
+      if (entityType === 'students') ok = await deleteStudent(numId, adminId);
+      else if (entityType === 'companies') ok = await deleteCompany(numId, adminId);
+      else if (entityType === 'drives') ok = await deleteDrive(numId, adminId);
+      else if (entityType === 'events') ok = await deleteEvent(numId, adminId);
+      if (ok) deleted++;
+      else errors.push({ id: numId, message: 'Not found or already deleted' });
+    } catch (err) {
+      errors.push({ id: numId, message: err.message || 'Failed' });
+    }
+  }
+  return { deleted, errors };
 }
 
 export async function getEventRegistrations(eventId) {
@@ -373,12 +560,12 @@ export async function getEventRegistrations(eventId) {
 }
 
 export async function getStudentIdsAll() {
-  const [rows] = await pool.query('SELECT id FROM students');
+  const [rows] = await pool.query('SELECT id FROM students WHERE deletedAt IS NULL');
   return rows.map((r) => r.id);
 }
 
 export async function getStudentIdsByDepartment(department) {
-  const [rows] = await pool.query('SELECT id FROM students WHERE department = ?', [department]);
+  const [rows] = await pool.query('SELECT id FROM students WHERE department = ? AND deletedAt IS NULL', [department]);
   return rows.map((r) => r.id);
 }
 
@@ -390,6 +577,100 @@ export async function getStudentIdsByDrive(driveId) {
 export async function getStudentIdsSelectedInDrive(driveId) {
   const [rows] = await pool.query('SELECT studentId FROM applications WHERE driveId = ? AND status = ?', [driveId, 'SELECTED']);
   return rows.map((r) => r.studentId);
+}
+
+// ——— Round decision (PASS/FAIL) ———
+/** Returns { application, drive, companyName, role, currentRound, roundName, isFinal } or null */
+export async function getApplicationWithRoundInfo(applicationId) {
+  const [apps] = await pool.query(
+    `SELECT a.id, a.studentId, a.driveId, a.status, a.currentRoundNumber, c.name AS companyName, d.role
+     FROM applications a
+     JOIN drives d ON d.id = a.driveId
+     JOIN companies c ON c.id = d.companyId
+     WHERE a.id = ?`,
+    [applicationId]
+  );
+  const app = apps[0];
+  if (!app) return null;
+  const currentRoundNumber = app.currentRoundNumber != null ? Number(app.currentRoundNumber) : 1;
+  let currentRound = null;
+  try {
+    const [rounds] = await pool.query(
+      'SELECT id, roundNumber, name, isFinal FROM drive_rounds WHERE driveId = ? AND roundNumber = ?',
+      [app.driveId, currentRoundNumber]
+    );
+    currentRound = rounds[0];
+  } catch (_) {}
+  return {
+    application: app,
+    companyName: app.companyName || 'Company',
+    role: app.role || 'Role',
+    currentRoundNumber,
+    roundName: currentRound?.name || `Round ${currentRoundNumber}`,
+    isFinal: !!currentRound?.isFinal,
+    roundId: currentRound?.id,
+  };
+}
+
+/** Process PASS or FAIL for an application's current round. Sends notifications. Returns { ok, error? } */
+export async function processRoundDecision(applicationId, decision) {
+  const info = await getApplicationWithRoundInfo(applicationId);
+  if (!info) return { ok: false, error: 'Application not found' };
+  const { application, companyName, role, currentRoundNumber, roundName, isFinal, roundId } = info;
+  const studentId = application.studentId;
+  const link = '/student/applications';
+
+  if (decision === 'PASS') {
+    if (roundId) {
+      await pool.query(
+        'UPDATE application_rounds SET status = ? WHERE applicationId = ? AND roundId = ?',
+        ['QUALIFIED', applicationId, roundId]
+      );
+    }
+    const treatAsFinal = isFinal || !roundId; // no rounds defined = single-round drive
+    if (treatAsFinal) {
+      await pool.query('UPDATE applications SET status = ? WHERE id = ?', ['SELECTED', applicationId]);
+      await notificationService.notifyStudent(
+        studentId,
+        `You are placed – ${companyName}`,
+        `Congratulations! You have been placed in ${companyName} – ${role}. CGC will coordinate with you for further steps.`,
+        link
+      );
+    } else if (roundId) {
+      const nextRound = currentRoundNumber + 1;
+      await pool.query('UPDATE applications SET currentRoundNumber = ?, status = ? WHERE id = ?', [nextRound, 'SHORTLISTED', applicationId]);
+      try {
+        const [nextRounds] = await pool.query('SELECT id FROM drive_rounds WHERE driveId = ? AND roundNumber = ?', [application.driveId, nextRound]);
+        if (nextRounds[0]) {
+          await pool.query(
+            'INSERT IGNORE INTO application_rounds (applicationId, roundId, status) VALUES (?, ?, ?)',
+            [applicationId, nextRounds[0].id, 'PENDING']
+          );
+        }
+      } catch (_) {}
+      await notificationService.notifyStudent(
+        studentId,
+        `Selected for Round ${nextRound} – ${companyName}`,
+        `You have been selected for Round ${nextRound} (${roundName}). Check your application for ${companyName} – ${role}.`,
+        link
+      );
+    }
+  } else {
+    if (roundId) {
+      await pool.query(
+        'UPDATE application_rounds SET status = ? WHERE applicationId = ? AND roundId = ?',
+        ['NOT_QUALIFIED', applicationId, roundId]
+      );
+    }
+    await pool.query('UPDATE applications SET status = ? WHERE id = ?', ['REJECTED', applicationId]);
+    await notificationService.notifyStudent(
+      studentId,
+      `Not selected for next round – ${companyName}`,
+      `You have not been selected for the next round of ${companyName} – ${role} placement drive.`,
+      link
+    );
+  }
+  return { ok: true };
 }
 
 // ——— Audit log ———
@@ -425,17 +706,18 @@ export async function getAuditLogs(filters = {}) {
 export async function getPlacementReport() {
   const [byDept] = await pool.query(
     `SELECT s.department, COUNT(DISTINCT CASE WHEN a.status = 'SELECTED' THEN a.studentId END) AS placed, COUNT(DISTINCT s.id) AS total
-     FROM students s LEFT JOIN applications a ON a.studentId = s.id GROUP BY s.department ORDER BY s.department`
+     FROM students s LEFT JOIN applications a ON a.studentId = s.id WHERE s.deletedAt IS NULL GROUP BY s.department ORDER BY s.department`
   );
   const [byCompany] = await pool.query(
     `SELECT c.name AS companyName, d.role, COUNT(a.id) AS selectedCount
-     FROM drives d JOIN companies c ON c.id = d.companyId
+     FROM drives d JOIN companies c ON c.id = d.companyId AND c.deletedAt IS NULL
      LEFT JOIN applications a ON a.driveId = d.id AND a.status = 'SELECTED'
+     WHERE d.deletedAt IS NULL
      GROUP BY d.id ORDER BY selectedCount DESC`
   );
   const [[totals]] = await pool.query(
     `SELECT COUNT(DISTINCT s.id) AS totalStudents, COUNT(DISTINCT CASE WHEN a.status = 'SELECTED' THEN a.studentId END) AS placed
-     FROM students s LEFT JOIN applications a ON a.studentId = s.id`
+     FROM students s LEFT JOIN applications a ON a.studentId = s.id WHERE s.deletedAt IS NULL`
   );
   return { byDepartment: byDept, byCompany: byCompany, totals: totals || {} };
 }
@@ -558,5 +840,10 @@ export async function getAdminById(id) {
 
 export async function updateAdminPassword(id, newPasswordHash) {
   const [r] = await pool.query('UPDATE admins SET password_hash = ? WHERE id = ?', [newPasswordHash, id]);
+  return r.affectedRows > 0;
+}
+
+export async function resetStudentPassword(studentId, newPasswordHash) {
+  const [r] = await pool.query('UPDATE students SET password_hash = ? WHERE id = ? AND deletedAt IS NULL', [newPasswordHash, studentId]);
   return r.affectedRows > 0;
 }
