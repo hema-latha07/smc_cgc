@@ -379,6 +379,26 @@ export async function uploadOffer(req, res) {
 
 export const uploadOfferMulter = upload.single('offerPdf');
 
+// Attendance upload shares the same imports directory pattern as bulk student import.
+const IMPORTS_DIR = path.join(path.dirname(OFFERS_DIR), 'imports');
+function ensureImportsDir() {
+  if (!fs.existsSync(IMPORTS_DIR)) fs.mkdirSync(IMPORTS_DIR, { recursive: true });
+}
+export const attendanceUploadMulter = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      ensureImportsDir();
+      cb(null, IMPORTS_DIR);
+    },
+    filename: (req, file, cb) =>
+      cb(
+        null,
+        `attendance_${Date.now()}_${Math.random().toString(36).slice(2)}${path.extname(file.originalname) || '.csv'}`
+      ),
+  }),
+  limits: { fileSize: 10 * 1024 * 1024 },
+}).single('file');
+
 // Events CRUD
 export async function listEvents(req, res) {
   const list = await adminService.listEvents({ type: req.query.type });
@@ -476,6 +496,115 @@ export async function exportEventRegistrations(req, res) {
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename=event_${eventId}_registrations.xlsx`);
   res.send(buffer);
+}
+
+// Training attendance
+export async function listTrainingAttendanceEvents(req, res) {
+  const days = req.query.days ? parseInt(req.query.days, 10) : 30;
+  const events = await adminService.listTrainingEventsForAttendance(Number.isNaN(days) ? 30 : days);
+  res.json({ events });
+}
+
+export async function getTrainingAttendance(req, res) {
+  const eventId = parseInt(req.params.eventId, 10);
+  const data = await adminService.getTrainingAttendance(eventId);
+  if (!data) return res.status(404).json({ error: 'Training event not found or not eligible for attendance' });
+  res.json(data);
+}
+
+export async function updateTrainingAttendanceBulk(req, res) {
+  const eventId = parseInt(req.params.eventId, 10);
+  const { updates } = req.body;
+  const updated = await adminService.updateTrainingAttendanceBulk(eventId, updates);
+  res.json({ updated });
+}
+
+export async function uploadTrainingAttendance(req, res) {
+  const eventId = parseInt(req.params.eventId, 10);
+  const data = await adminService.getTrainingAttendance(eventId);
+  if (!data) return res.status(404).json({ error: 'Training event not found or not eligible for attendance' });
+  if (!req.file) return res.status(400).json({ error: 'File required (CSV or Excel)' });
+
+  const ext = (path.extname(req.file.originalname) || '').toLowerCase();
+  let rows = [];
+  try {
+    if (ext === '.csv') {
+      const raw = fs.readFileSync(req.file.path, 'utf8');
+      const lines = raw.split(/\r?\n/).filter((l) => l.trim());
+      if (lines.length < 2) throw new Error('No data rows in file');
+      const headers = lines[0].split(',').map((h) => h.trim().toLowerCase());
+      const idxDept = headers.findIndex((h) => h === 'deptno' || h === 'dept_no' || h === 'dept');
+      const idxName = headers.findIndex((h) => h === 'name');
+      const idxAtt = headers.findIndex((h) => h === 'attendance' || h === 'status');
+      if (idxDept === -1) throw new Error('deptNo column is required');
+      for (let i = 1; i < lines.length; i += 1) {
+        const cols = lines[i].split(',').map((v) => v.trim());
+        const deptNo = cols[idxDept] || '';
+        if (!deptNo) continue;
+        rows.push({
+          deptNo,
+          name: idxName >= 0 ? cols[idxName] || '' : '',
+          attendance: idxAtt >= 0 ? cols[idxAtt] || '' : '',
+        });
+      }
+    } else if (ext === '.xlsx' || ext === '.xls') {
+      const ExcelJS = (await import('exceljs')).default;
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.readFile(req.file.path);
+      const ws = wb.worksheets[0];
+      if (!ws) throw new Error('No sheet in workbook');
+      const cols = {};
+      ws.getRow(1).eachCell((cell, colNumber) => {
+        const key = (cell.value && cell.value.toString().toLowerCase().replace(/\s+/g, '')) || `col${colNumber}`;
+        cols[colNumber] = key;
+      });
+      for (let i = 2; i <= ws.rowCount; i += 1) {
+        const row = {};
+        ws.getRow(i).eachCell((cell, colNumber) => {
+          const k = cols[colNumber] || `col${colNumber}`;
+          row[k] = cell.value != null ? cell.value.toString() : '';
+        });
+        const deptNo = row.deptno || row.dept_no || row.dept || '';
+        if (!deptNo) continue;
+        const attendance = row.attendance || row.status || '';
+        rows.push({
+          deptNo,
+          name: row.name || '',
+          attendance,
+        });
+      }
+    } else {
+      throw new Error('Use CSV or Excel (.xlsx, .xls)');
+    }
+  } catch (err) {
+    if (req.file.path && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    return res.status(400).json({ error: err.message || 'Failed to parse file' });
+  }
+
+  if (req.file.path && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+  if (!rows.length) return res.status(400).json({ error: 'No usable rows in file' });
+
+  const byDept = new Map();
+  data.registrations.forEach((r) => byDept.set((r.deptNo || '').toString().trim().toLowerCase(), r.registrationId));
+
+  const updates = [];
+  const warnings = [];
+  for (const r of rows) {
+    const key = r.deptNo.toString().trim().toLowerCase();
+    const regId = byDept.get(key);
+    if (!regId) {
+      warnings.push({ deptNo: r.deptNo, message: 'No registration found for this deptNo' });
+      continue;
+    }
+    let val = r.attendance ? r.attendance.toString().trim().toLowerCase() : '';
+    let status = null;
+    if (['present', 'p', 'yes', 'y', '1'].includes(val)) status = 'PRESENT';
+    else if (['absent', 'a', 'no', 'n', '0'].includes(val)) status = 'ABSENT';
+    updates.push({ registrationId: regId, attendanceStatus: status });
+  }
+
+  const updated = await adminService.updateTrainingAttendanceBulk(eventId, updates);
+  res.json({ updated, warnings });
 }
 
 // Notifications broadcast
@@ -637,10 +766,7 @@ export async function bulkImportStudents(req, res) {
   res.json(result);
 }
 
-const IMPORTS_DIR = path.join(path.dirname(OFFERS_DIR), 'imports');
-function ensureImportsDir() {
-  if (!fs.existsSync(IMPORTS_DIR)) fs.mkdirSync(IMPORTS_DIR, { recursive: true });
-}
+
 export const bulkImportMulter = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => {

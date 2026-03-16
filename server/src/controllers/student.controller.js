@@ -1,6 +1,7 @@
 import * as studentService from '../services/student.service.js';
 import * as applicationService from '../services/application.service.js';
 import * as notificationService from '../utils/notifications.js';
+import * as adminService from '../services/admin.service.js';
 import pool from '../db/pool.js';
 import bcrypt from 'bcrypt';
 
@@ -219,6 +220,11 @@ export async function unregisterEvent(req, res) {
   const removed = await studentService.unregisterEvent(eventId, req.studentId);
   if (!removed) return res.status(404).json({ error: 'Registration not found' });
   res.json({ message: 'Unregistered from event' });
+}
+
+export async function getTrainingAttendance(req, res) {
+  const sessions = await adminService.getTrainingAttendanceForStudent(req.studentId);
+  res.json({ sessions });
 }
 
 export async function getNotifications(req, res) {

@@ -27,6 +27,8 @@
    - If the project has **`database/migrations/003_admin_features.sql`**, run that too (adds company notes, min CGPA on drives). See **database/DATABASE_WORKBENCH.md** for the full migration order.
    - Run **`database/migrations/004_multi_rounds.sql`** for multi-round placement support (drive rounds, application round status, current round column). Required for round-based Pass/Fail and automatic notifications.
    - Run **`database/migrations/005_soft_delete.sql`** for recycle bin support (soft delete and restore for students, companies, drives, events).
+   - Run **`database/migrations/006_student_password_hash.sql`** for student-chosen passwords (after first login).
+   - Run **`database/migrations/007_training_attendance.sql`** for training attendance columns on `event_registrations`.
 
 5. **(Optional)** Add sample data:
    - From the project root, run:

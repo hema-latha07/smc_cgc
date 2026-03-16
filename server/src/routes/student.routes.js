@@ -35,6 +35,7 @@ router.get('/offers/:offerId/download', studentController.downloadOfferPdf);
 router.get('/events', studentController.getEvents);
 router.post('/events/:eventId/register', studentController.registerEvent);
 router.delete('/events/:eventId/register', studentController.unregisterEvent);
+router.get('/attendance', studentController.getTrainingAttendance);
 router.get('/notifications/unread-count', studentController.getUnreadNotificationCount);
 router.get('/notifications', studentController.getNotifications);
 router.post('/notifications/:id/read', studentController.markNotificationRead);

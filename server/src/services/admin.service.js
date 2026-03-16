@@ -559,6 +559,89 @@ export async function getEventRegistrations(eventId) {
   return rows;
 }
 
+// ——— Training attendance (TRAINING events with a drive) ———
+
+export async function listTrainingEventsForAttendance(days = 30) {
+  const [rows] = await pool.query(
+    `SELECT e.id, e.title, e.startTime, e.endTime, e.location,
+            d.role AS driveRole, c.name AS companyName,
+            COUNT(er.id) AS registeredCount,
+            SUM(CASE WHEN er.attendanceStatus = 'PRESENT' THEN 1 ELSE 0 END) AS presentCount
+     FROM events e
+     LEFT JOIN drives d ON d.id = e.driveId
+     LEFT JOIN companies c ON c.id = d.companyId
+     LEFT JOIN event_registrations er ON er.eventId = e.id
+     WHERE e.deletedAt IS NULL
+       AND e.type = 'TRAINING'
+       AND e.driveId IS NOT NULL
+       AND e.startTime >= DATE_SUB(NOW(), INTERVAL ? DAY)
+     GROUP BY e.id
+     ORDER BY e.startTime DESC`,
+    [days]
+  );
+  return rows;
+}
+
+export async function getTrainingAttendance(eventId) {
+  const event = await getEventById(eventId);
+  if (!event || event.type !== 'TRAINING' || !event.driveId) return null;
+  const [rows] = await pool.query(
+    `SELECT er.id AS registrationId, er.registeredAt,
+            s.id AS studentId, s.deptNo, s.name, s.department, s.email,
+            er.attendanceStatus
+     FROM event_registrations er
+     JOIN students s ON s.id = er.studentId
+     WHERE er.eventId = ?
+     ORDER BY s.deptNo ASC`,
+    [eventId]
+  );
+  return { event, registrations: rows };
+}
+
+export async function updateTrainingAttendanceBulk(eventId, updates) {
+  if (!Array.isArray(updates) || updates.length === 0) return 0;
+  const ids = updates.map((u) => u.registrationId).filter((id) => Number.isInteger(Number(id)));
+  if (!ids.length) return 0;
+  const [rows] = await pool.query(
+    'SELECT id FROM event_registrations WHERE eventId = ? AND id IN (?)',
+    [eventId, ids]
+  );
+  const allowedIds = new Set(rows.map((r) => r.id));
+  let updated = 0;
+  for (const u of updates) {
+    const regId = Number(u.registrationId);
+    if (!allowedIds.has(regId)) continue;
+    const status = u.attendanceStatus === 'PRESENT' ? 'PRESENT'
+      : u.attendanceStatus === 'ABSENT' ? 'ABSENT'
+      : null;
+    const [r] = await pool.query(
+      'UPDATE event_registrations SET attendanceStatus = ?, attendanceMarkedAt = NOW() WHERE id = ?',
+      [status, regId]
+    );
+    if (r.affectedRows > 0) updated += 1;
+  }
+  return updated;
+}
+
+export async function getTrainingAttendanceForStudent(studentId) {
+  const [rows] = await pool.query(
+    `SELECT e.id AS eventId, e.title, e.startTime, e.endTime, e.location,
+            d.role AS driveRole, c.name AS companyName,
+            er.attendanceStatus
+     FROM events e
+     JOIN event_registrations er ON er.eventId = e.id
+     JOIN drives d ON d.id = e.driveId
+     JOIN companies c ON c.id = d.companyId
+     WHERE e.deletedAt IS NULL
+       AND e.type = 'TRAINING'
+       AND e.driveId IS NOT NULL
+       AND er.studentId = ?
+     ORDER BY e.startTime DESC`,
+    [studentId]
+  );
+  return rows;
+}
+
 export async function getStudentIdsAll() {
   const [rows] = await pool.query('SELECT id FROM students WHERE deletedAt IS NULL');
   return rows.map((r) => r.id);

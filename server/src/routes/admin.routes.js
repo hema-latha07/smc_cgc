@@ -60,6 +60,12 @@ router.delete('/events/:id', adminController.deleteEvent);
 router.get('/events/:eventId/registrations', adminController.getEventRegistrations);
 router.get('/events/:eventId/export', adminController.exportEventRegistrations);
 
+// Training attendance
+router.get('/attendance/trainings', adminController.listTrainingAttendanceEvents);
+router.get('/attendance/trainings/:eventId', adminController.getTrainingAttendance);
+router.post('/attendance/trainings/:eventId/bulk', adminController.updateTrainingAttendanceBulk);
+router.post('/attendance/trainings/:eventId/upload', adminController.attendanceUploadMulter, adminController.uploadTrainingAttendance);
+
 router.get('/recycle-bin/students', adminController.listDeletedStudents);
 router.get('/recycle-bin/companies', adminController.listDeletedCompanies);
 router.get('/recycle-bin/drives', adminController.listDeletedDrives);

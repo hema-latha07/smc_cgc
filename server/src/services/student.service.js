@@ -157,7 +157,22 @@ export async function updateOfferDecision(offerId, decision) {
 }
 
 export async function registerEvent(eventId, studentId) {
-  await pool.query('INSERT IGNORE INTO event_registrations (eventId, studentId) VALUES (?, ?)', [eventId, studentId]);
+  // Only training events linked to a drive participate in attendance.
+  const [events] = await pool.query(
+    'SELECT id, type, driveId FROM events WHERE id = ? AND type = ? AND driveId IS NOT NULL',
+    [eventId, 'TRAINING']
+  );
+  if (events.length) {
+    await pool.query(
+      'INSERT IGNORE INTO event_registrations (eventId, studentId, attendanceStatus) VALUES (?, ?, ?)',
+      [eventId, studentId, 'ABSENT']
+    );
+  } else {
+    await pool.query(
+      'INSERT IGNORE INTO event_registrations (eventId, studentId) VALUES (?, ?)',
+      [eventId, studentId]
+    );
+  }
 }
 
 export async function unregisterEvent(eventId, studentId) {
