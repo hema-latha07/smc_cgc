@@ -15,6 +15,7 @@ export default function AdminDriveStudents() {
   const [statusFilter, setStatusFilter] = useState('');
   const [selected, setSelected] = useState(new Set());
   const [bulkStatus, setBulkStatus] = useState('');
+  const [bulkRoundDecision, setBulkRoundDecision] = useState('');
   const [offerModal, setOfferModal] = useState(null);
   const [offerDeadline, setOfferDeadline] = useState('');
   const [offerFile, setOfferFile] = useState(null);
@@ -57,6 +58,35 @@ export default function AdminDriveStudents() {
     setSelected(new Set());
     setBulkStatus('');
     fetch();
+  };
+
+  const roundDecision = async (applicationId, decision) => {
+    try {
+      await adminApi.post(`/applications/${applicationId}/round-decision`, { decision });
+      toast.success(decision === 'PASS' ? 'Marked pass for this round' : 'Marked not selected');
+      fetch();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Failed');
+    }
+  };
+
+  const bulkRoundDecisionApply = async () => {
+    if (!bulkRoundDecision || selected.size === 0) {
+      toast.error('Select applications and choose Pass or Fail');
+      return;
+    }
+    try {
+      const { data } = await adminApi.post('/applications/round-decision-bulk', {
+        applicationIds: Array.from(selected),
+        decision: bulkRoundDecision,
+      });
+      toast.success(`Applied to ${data.count} application(s)`);
+      setSelected(new Set());
+      setBulkRoundDecision('');
+      fetch();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Failed');
+    }
   };
 
   const toggleSelect = (id) => {
@@ -129,13 +159,21 @@ export default function AdminDriveStudents() {
         <button onClick={downloadExport} className="btn-secondary">Export Excel</button>
         {selected.size > 0 && (
           <>
+            <span className="text-slate-500 text-sm">Round decision:</span>
+            <select value={bulkRoundDecision} onChange={(e) => setBulkRoundDecision(e.target.value)} className="px-4 py-2 rounded-lg border border-slate-200">
+              <option value="">Bulk round</option>
+              <option value="PASS">Pass this round</option>
+              <option value="FAIL">Fail (not selected)</option>
+            </select>
+            <button onClick={bulkRoundDecisionApply} className="btn-primary">Apply</button>
+            <span className="text-slate-400">|</span>
             <select value={bulkStatus} onChange={(e) => setBulkStatus(e.target.value)} className="px-4 py-2 rounded-lg border border-slate-200">
               <option value="">Bulk status</option>
               <option value="SHORTLISTED">Shortlist</option>
               <option value="SELECTED">Select</option>
               <option value="REJECTED">Reject</option>
             </select>
-            <button onClick={bulkUpdate} className="btn-primary">Apply</button>
+            <button onClick={bulkUpdate} className="btn-secondary">Apply status</button>
             <button onClick={() => setSelected(new Set())} className="text-slate-500 text-sm">Clear</button>
           </>
         )}
@@ -164,6 +202,7 @@ export default function AdminDriveStudents() {
                   <th className="text-left py-3 px-4 font-semibold text-slate-700">Department</th>
                   <th className="text-left py-3 px-4 font-semibold text-slate-700">CGPA</th>
                   {list.some((s) => s.eligible !== undefined) && <th className="text-left py-3 px-4 font-semibold text-slate-700">Eligible</th>}
+                  <th className="text-left py-3 px-4 font-semibold text-slate-700">Current round</th>
                   <th className="text-left py-3 px-4 font-semibold text-slate-700">Status</th>
                   <th className="text-left py-3 px-4 font-semibold text-slate-700">Actions</th>
                 </tr>
@@ -185,6 +224,9 @@ export default function AdminDriveStudents() {
                         {s.eligible === true ? <span className="text-emerald-600 font-medium">Yes</span> : s.eligible === false ? <span className="text-amber-600">No</span> : '—'}
                       </td>
                     )}
+                    <td className="py-3 px-4 text-slate-600 text-sm">
+                      {s.currentRoundName ?? (s.currentRoundNumber != null ? `Round ${s.currentRoundNumber}` : '—')}
+                    </td>
                     <td className="py-3 px-4">
                       <select value={s.status} onChange={(e) => updateStatus(s.applicationId, e.target.value)} className="text-sm border border-slate-200 rounded px-2 py-1">
                         <option value="APPLIED">Applied</option>
@@ -193,7 +235,15 @@ export default function AdminDriveStudents() {
                         <option value="REJECTED">Rejected</option>
                       </select>
                     </td>
-                    <td className="py-3 px-4">
+                    <td className="py-3 px-4 flex flex-wrap gap-1">
+                      {s.status !== 'REJECTED' && s.status !== 'SELECTED' && (
+                        <>
+                          <button type="button" onClick={() => roundDecision(s.applicationId, 'PASS')} className="text-emerald-600 text-sm font-medium hover:underline">Pass</button>
+                          <span className="text-slate-300">|</span>
+                          <button type="button" onClick={() => roundDecision(s.applicationId, 'FAIL')} className="text-red-600 text-sm font-medium hover:underline">Fail</button>
+                          <span className="text-slate-300">|</span>
+                        </>
+                      )}
                       {s.status === 'SELECTED' && (
                         <button onClick={() => setOfferModal({ applicationId: s.applicationId, studentName: s.name })} className="text-primary-600 text-sm font-medium hover:underline">Upload offer</button>
                       )}

@@ -84,6 +84,7 @@ export default function AdminEvents() {
   const [calendarMonth, setCalendarMonth] = useState(() => new Date());
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({ type: 'WORKSHOP', driveId: '', title: '', startTime: '', endTime: '', location: '', description: '' });
+  const [startTimeError, setStartTimeError] = useState('');
 
   const fetch = () => {
     setLoading(true);
@@ -102,6 +103,7 @@ export default function AdminEvents() {
 
   const save = async (e) => {
     e.preventDefault();
+    setStartTimeError('');
     if (!form.type || !form.title || !form.startTime || !form.endTime) {
       toast.error('Type, title, start and end required');
       return;
@@ -118,18 +120,11 @@ export default function AdminEvents() {
       setModal(null);
       fetch();
     } catch (e) {
-      toast.error(e.response?.data?.error || 'Failed');
-    }
-  };
-
-  const remove = async (id) => {
-    if (!confirm('Delete this event?')) return;
-    try {
-      await adminApi.delete(`/events/${id}`);
-      toast.success('Deleted');
-      fetch();
-    } catch (e) {
-      toast.error(e.response?.data?.error || 'Failed');
+      const msg = e.response?.data?.error || 'Failed';
+      if (msg.toLowerCase().includes('another event is already scheduled')) {
+        setStartTimeError(msg);
+      }
+      toast.error(msg);
     }
   };
 
@@ -224,7 +219,6 @@ export default function AdminEvents() {
                       <Link to={`/admin/events/${ev.id}/registrations`} className="text-primary-600 text-sm font-medium mr-3 hover:underline">Registrations</Link>
                       <button onClick={() => duplicate(ev.id)} className="text-slate-600 text-sm font-medium mr-3 hover:underline">Duplicate</button>
                       <button onClick={() => openEdit(ev)} className="text-primary-600 text-sm font-medium mr-3 hover:underline">Edit</button>
-                      <button onClick={() => remove(ev.id)} className="text-red-600 text-sm font-medium hover:underline">Delete</button>
                     </td>
                   </tr>
                 ))}
@@ -247,7 +241,18 @@ export default function AdminEvents() {
                 {drives.map((d) => <option key={d.id} value={d.id}>{d.companyName} – {d.role}</option>)}
               </select>
               <input required placeholder="Title" value={form.title} onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))} className="w-full px-4 py-2 rounded-lg border border-slate-200" />
-              <input required type="datetime-local" placeholder="Start" value={form.startTime} onChange={(e) => setForm((f) => ({ ...f, startTime: e.target.value }))} className="w-full px-4 py-2 rounded-lg border border-slate-200" />
+              <input
+                required
+                type="datetime-local"
+                placeholder="Start"
+                value={form.startTime}
+                onChange={(e) => {
+                  setForm((f) => ({ ...f, startTime: e.target.value }));
+                  setStartTimeError('');
+                }}
+                className={`w-full px-4 py-2 rounded-lg border ${startTimeError ? 'border-red-300 focus:border-red-400 focus:ring-red-200' : 'border-slate-200'}`}
+              />
+              {startTimeError && <p className="text-xs text-red-500 mt-1">{startTimeError}</p>}
               <input required type="datetime-local" placeholder="End" value={form.endTime} onChange={(e) => setForm((f) => ({ ...f, endTime: e.target.value }))} className="w-full px-4 py-2 rounded-lg border border-slate-200" />
               <input placeholder="Location" value={form.location} onChange={(e) => setForm((f) => ({ ...f, location: e.target.value }))} className="w-full px-4 py-2 rounded-lg border border-slate-200" />
               <textarea placeholder="Description" value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} className="w-full px-4 py-2 rounded-lg border border-slate-200" rows={2} />

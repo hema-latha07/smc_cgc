@@ -10,6 +10,7 @@ export default function AdminCompanies() {
   const [list, setList] = useState([]);
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(null);
   const [search, setSearch] = useState('');
   const [offset, setOffset] = useState(0);
   const [modal, setModal] = useState(null);
@@ -17,12 +18,18 @@ export default function AdminCompanies() {
 
   const fetch = () => {
     setLoading(true);
+    setFetchError(null);
     const params = { limit: LIMIT, offset };
     if (search) params.search = search;
     adminApi.get('/companies', { params }).then(({ data }) => {
       setList(data.companies || []);
       setTotalCount(data.totalCount ?? 0);
-    }).catch(() => {}).finally(() => setLoading(false));
+    }).catch((err) => {
+      setList([]);
+      setTotalCount(0);
+      setFetchError(err.response?.status === 401 ? 'Please log in again' : 'Could not load companies. Is the backend running on port 5000?');
+      toast.error('Failed to load companies');
+    }).finally(() => setLoading(false));
   };
 
   useEffect(() => {
@@ -51,20 +58,24 @@ export default function AdminCompanies() {
     }
   };
 
-  const remove = async (id) => {
-    if (!confirm('Delete this company?')) return;
-    try {
-      await adminApi.delete(`/companies/${id}`);
-      toast.success('Deleted');
-      fetch();
-    } catch (e) {
-      toast.error(e.response?.data?.error || 'Failed');
-    }
-  };
-
   const openEdit = (c) => {
     setModal({ id: c.id });
     setForm({ name: c.name, industry: c.industry ?? '', contactPerson: c.contactPerson ?? '', contactEmail: c.contactEmail ?? '', contactPhone: c.contactPhone ?? '', jobDescription: c.jobDescription ?? '', salaryPackage: c.salaryPackage ?? '' });
+  };
+
+  const downloadExcel = async () => {
+    try {
+      const { data } = await adminApi.get('/companies/export', { responseType: 'blob' });
+      const url = URL.createObjectURL(data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'companies.xlsx';
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success('Export downloaded');
+    } catch (_) {
+      toast.error('Export failed');
+    }
   };
 
   return (
@@ -74,7 +85,10 @@ export default function AdminCompanies() {
           <h1 className="text-2xl font-bold text-slate-800">Companies</h1>
           <p className="text-slate-500 mt-1">Manage company details</p>
         </div>
-        <button onClick={() => { setModal({}); setForm({ name: '', industry: '', contactPerson: '', contactEmail: '', contactPhone: '', jobDescription: '', salaryPackage: '' }); }} className="btn-primary">Add company</button>
+        <div className="flex gap-2">
+          <button onClick={downloadExcel} className="btn-secondary">Export Excel</button>
+          <button onClick={() => { setModal({}); setForm({ name: '', industry: '', contactPerson: '', contactEmail: '', contactPhone: '', jobDescription: '', salaryPackage: '' }); }} className="btn-primary">Add company</button>
+        </div>
       </div>
       <input
         type="text"
@@ -83,6 +97,12 @@ export default function AdminCompanies() {
         onChange={(e) => { setSearch(e.target.value); setOffset(0); }}
         className="px-4 py-2 rounded-lg border border-slate-200 w-64"
       />
+      {fetchError && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 flex items-center justify-between gap-4">
+          <p className="text-amber-800 text-sm">{fetchError}</p>
+          <button type="button" onClick={() => fetch()} className="text-amber-700 font-medium hover:underline text-sm">Retry</button>
+        </div>
+      )}
       <div className="bg-white rounded-xl border border-slate-100 overflow-hidden shadow-sm">
         {loading ? (
           <TableSkeleton rows={5} cols={5} />
@@ -117,7 +137,6 @@ export default function AdminCompanies() {
                     <td className="py-3 px-4">
                       <Link to={`/admin/companies/${c.id}`} className="text-primary-600 text-sm font-medium mr-3 hover:underline">View</Link>
                       <button onClick={() => openEdit(c)} className="text-primary-600 text-sm font-medium mr-3 hover:underline">Edit</button>
-                      <button onClick={() => remove(c.id)} className="text-red-600 text-sm font-medium hover:underline">Delete</button>
                     </td>
                   </tr>
                 ))}

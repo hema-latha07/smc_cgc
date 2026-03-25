@@ -45,6 +45,19 @@ export async function updateStudentProfile(studentId, data) {
   return r.affectedRows > 0;
 }
 
+export async function getStudentAuthById(id) {
+  const [rows] = await pool.query(
+    'SELECT id, deptNo, dob_hash, password_hash FROM students WHERE id = ? AND deletedAt IS NULL',
+    [id]
+  );
+  return rows[0] || null;
+}
+
+export async function updateStudentPasswordHash(id, newHash) {
+  const [r] = await pool.query('UPDATE students SET password_hash = ? WHERE id = ?', [newHash, id]);
+  return r.affectedRows > 0;
+}
+
 export async function getDrivesForStudent(studentId) {
   const [rows] = await pool.query(
     `SELECT d.id, d.role, d.ctc, d.eligibility, d.deadline, d.status, d.timelineStart, d.timelineEnd,
@@ -144,7 +157,22 @@ export async function updateOfferDecision(offerId, decision) {
 }
 
 export async function registerEvent(eventId, studentId) {
-  await pool.query('INSERT IGNORE INTO event_registrations (eventId, studentId) VALUES (?, ?)', [eventId, studentId]);
+  // Only training events linked to a drive participate in attendance.
+  const [events] = await pool.query(
+    'SELECT id, type, driveId FROM events WHERE id = ? AND type = ? AND driveId IS NOT NULL',
+    [eventId, 'TRAINING']
+  );
+  if (events.length) {
+    await pool.query(
+      'INSERT IGNORE INTO event_registrations (eventId, studentId, attendanceStatus) VALUES (?, ?, ?)',
+      [eventId, studentId, 'ABSENT']
+    );
+  } else {
+    await pool.query(
+      'INSERT IGNORE INTO event_registrations (eventId, studentId) VALUES (?, ?)',
+      [eventId, studentId]
+    );
+  }
 }
 
 export async function unregisterEvent(eventId, studentId) {

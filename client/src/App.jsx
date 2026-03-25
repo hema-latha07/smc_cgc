@@ -10,6 +10,7 @@ import StudentDrives from './pages/student/Drives';
 import StudentApplications from './pages/student/Applications';
 import StudentOffers from './pages/student/Offers';
 import StudentEvents from './pages/student/Events';
+import StudentAttendance from './pages/student/Attendance';
 import StudentNotifications from './pages/student/Notifications';
 import StudentChat from './pages/student/Chat';
 import StudentProfile from './pages/student/Profile';
@@ -24,8 +25,10 @@ import AdminNotifications from './pages/admin/Notifications';
 import AdminChat from './pages/admin/Chat';
 import AdminPlacementReport from './pages/admin/PlacementReport';
 import AdminAuditLog from './pages/admin/AuditLog';
+import AdminRecycleBin from './pages/admin/RecycleBin';
 import AdminProfile from './pages/admin/AdminProfile';
 import AdminCompanyDetail from './pages/admin/CompanyDetail';
+import AdminAttendance from './pages/admin/Attendance';
 
 function PrivateStudent({ children }) {
   const token = localStorage.getItem('studentToken');
@@ -83,6 +86,7 @@ export default function App() {
         <Route path="applications" element={<StudentApplications />} />
         <Route path="offers" element={<StudentOffers />} />
         <Route path="events" element={<StudentEvents />} />
+        <Route path="attendance" element={<StudentAttendance />} />
         <Route path="chat" element={<StudentChat />} />
         <Route path="profile" element={<StudentProfile />} />
         <Route path="notifications" element={<StudentNotifications />} />
@@ -97,9 +101,11 @@ export default function App() {
         <Route path="drives/:driveId/students" element={<AdminDriveStudents />} />
         <Route path="events" element={<AdminEvents />} />
         <Route path="events/:eventId/registrations" element={<AdminEventRegistrations />} />
+        <Route path="attendance" element={<AdminAttendance />} />
         <Route path="chat" element={<AdminChat />} />
         <Route path="notifications" element={<AdminNotifications />} />
         <Route path="placement-report" element={<AdminPlacementReport />} />
+        <Route path="recycle-bin" element={<AdminRecycleBin />} />
         <Route path="audit-log" element={<AdminAuditLog />} />
         <Route path="profile" element={<AdminProfile />} />
       </Route>

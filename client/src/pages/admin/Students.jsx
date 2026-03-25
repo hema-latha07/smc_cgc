@@ -10,26 +10,33 @@ export default function AdminStudents() {
   const [list, setList] = useState([]);
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(null);
   const [search, setSearch] = useState('');
   const [department, setDepartment] = useState('');
   const [offset, setOffset] = useState(0);
   const [modal, setModal] = useState(null);
   const [contextStudentId, setContextStudentId] = useState(null);
-  const [importModal, setImportModal] = useState(false);
   const [importFile, setImportFile] = useState(null);
   const [importResult, setImportResult] = useState(null);
   const [importing, setImporting] = useState(false);
   const [form, setForm] = useState({ deptNo: '', name: '', password: '', department: '', cgpa: '', email: '', phone: '' });
+  const [resetInfo, setResetInfo] = useState(null);
 
   const fetch = () => {
     setLoading(true);
+    setFetchError(null);
     const params = { limit: LIMIT, offset };
     if (search) params.search = search;
     if (department) params.department = department;
     adminApi.get('/students', { params }).then(({ data }) => {
       setList(data.students || []);
       setTotalCount(data.totalCount ?? 0);
-    }).catch(() => {}).finally(() => setLoading(false));
+    }).catch((err) => {
+      setList([]);
+      setTotalCount(0);
+      setFetchError(err.response?.status === 401 ? 'Please log in again' : 'Could not load students. Is the backend running on port 5000?');
+      toast.error('Failed to load students');
+    }).finally(() => setLoading(false));
   };
 
   useEffect(() => {
@@ -65,17 +72,6 @@ export default function AdminStudents() {
     }
   };
 
-  const remove = async (id) => {
-    if (!confirm('Delete this student?')) return;
-    try {
-      await adminApi.delete(`/students/${id}`);
-      toast.success('Deleted');
-      fetch();
-    } catch (e) {
-      toast.error(e.response?.data?.error || 'Failed');
-    }
-  };
-
   const openEdit = (s) => {
     setModal({ id: s.id, mode: 'edit' });
     setForm({ name: s.name, department: s.department, cgpa: s.cgpa ?? '', email: s.email, phone: s.phone ?? '' });
@@ -95,6 +91,21 @@ export default function AdminStudents() {
     toast.success('Template downloaded');
   };
 
+  const downloadExcel = async () => {
+    try {
+      const { data } = await adminApi.get('/students/export', { responseType: 'blob' });
+      const url = URL.createObjectURL(data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'students.xlsx';
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success('Export downloaded');
+    } catch (_) {
+      toast.error('Export failed');
+    }
+  };
+
   const doBulkImport = async (e) => {
     e.preventDefault();
     if (!importFile) {
@@ -108,8 +119,9 @@ export default function AdminStudents() {
     try {
       const { data } = await adminApi.post('/students/bulk-import', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       setImportResult(data);
-      toast.success(`Imported ${data.created} students`);
+      toast.success(`Created ${data.created} student logins`);
       if (data.created > 0) fetch();
+      setImportFile(null);
     } catch (err) {
       toast.error(err.response?.data?.error || 'Import failed');
     } finally {
@@ -125,12 +137,60 @@ export default function AdminStudents() {
           <p className="text-slate-500 mt-1">View, add, edit, delete</p>
         </div>
         <div className="flex gap-2">
-          <button onClick={() => setImportModal(true)} className="btn-secondary">Bulk import</button>
+          <button onClick={downloadExcel} className="btn-secondary">Export Excel</button>
           <button onClick={() => { setModal({ mode: 'create' }); setForm({ deptNo: '', name: '', password: '', department: '', cgpa: '', email: '', phone: '' }); }} className="btn-primary">
             Add student
           </button>
         </div>
       </div>
+
+      {/* Create student logins (CGC paid list) */}
+      <section className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 md:p-8">
+        <h2 className="text-lg font-bold text-slate-800 mb-2">Create student logins (CGC paid list)</h2>
+        <p className="text-slate-500 text-sm mb-5 max-w-2xl">
+          For students who have registered with CGC and paid ₹2000. Upload the list here to create their portal accounts. Only these students will be able to log in using roll no and date of birth.
+        </p>
+        <form onSubmit={doBulkImport} className="space-y-5">
+          <div>
+            <a href="#" onClick={(e) => { e.preventDefault(); downloadTemplate(); }} className="text-primary-600 text-sm font-medium hover:underline">
+              Download CSV template
+            </a>
+            <p className="text-slate-400 text-xs mt-1">Columns: deptNo, name, password (DOB e.g. DD/MM/YYYY), department, email; optional: cgpa, phone</p>
+          </div>
+          <div>
+            <label htmlFor="cgc-file" className="block text-sm font-medium text-slate-700 mb-2">Upload CGC list (CSV or Excel)</label>
+            <input
+              id="cgc-file"
+              type="file"
+              accept=".csv,.xlsx,.xls"
+              onChange={(e) => setImportFile(e.target.files?.[0] ?? null)}
+              className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-slate-700 text-sm file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-slate-100 file:text-slate-700 file:font-medium file:cursor-pointer hover:file:bg-slate-200"
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-3 pt-1">
+            <button type="submit" disabled={importing} className="btn-primary disabled:opacity-50">
+              {importing ? 'Creating…' : 'Create student logins'}
+            </button>
+          </div>
+          {importResult && (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-2">
+              <p className="font-medium text-slate-700">
+                <span className="text-emerald-600">Created: {importResult.created} account(s)</span>
+                {importResult.errors?.length > 0 && (
+                  <span className="block mt-1 text-amber-600">Errors: {importResult.errors.length} row(s)</span>
+                )}
+              </p>
+              {importResult.errors?.length > 0 && (
+                <p className="text-amber-600 text-sm">
+                  {importResult.errors.slice(0, 3).map((e) => `Row ${e.row}: ${e.message}`).join('; ')}
+                  {importResult.errors.length > 3 ? ' …' : ''}
+                </p>
+              )}
+            </div>
+          )}
+        </form>
+      </section>
+
       <div className="flex flex-wrap gap-3">
         <input
           type="text"
@@ -147,6 +207,12 @@ export default function AdminStudents() {
           className="px-4 py-2 rounded-lg border border-slate-200 w-40"
         />
       </div>
+      {fetchError && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 flex items-center justify-between gap-4">
+          <p className="text-amber-800 text-sm">{fetchError}</p>
+          <button type="button" onClick={() => fetch()} className="text-amber-700 font-medium hover:underline text-sm">Retry</button>
+        </div>
+      )}
       <div className="bg-white rounded-xl border border-slate-100 overflow-hidden shadow-sm">
         {loading ? (
           <TableSkeleton rows={LIMIT} cols={6} />
@@ -183,7 +249,22 @@ export default function AdminStudents() {
                     <td className="py-3 px-4">
                       <button onClick={() => setContextStudentId(s.id)} className="text-primary-600 text-sm font-medium mr-3 hover:underline">View</button>
                       <button onClick={() => openEdit(s)} className="text-primary-600 text-sm font-medium mr-3 hover:underline">Edit</button>
-                      <button onClick={() => remove(s.id)} className="text-red-600 text-sm font-medium hover:underline">Delete</button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (!window.confirm(`Reset password for ${s.name} (${s.deptNo})?`)) return;
+                          try {
+                            const { data } = await adminApi.post(`/students/${s.id}/reset-password`);
+                            setResetInfo({ deptNo: data.deptNo, name: data.name, tempPassword: data.tempPassword });
+                            toast.success('Temporary password generated');
+                          } catch (err) {
+                            toast.error(err.response?.data?.error || 'Failed to reset password');
+                          }
+                        }}
+                        className="text-amber-600 text-sm font-medium hover:underline"
+                      >
+                        Reset password
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -204,27 +285,23 @@ export default function AdminStudents() {
 
       {contextStudentId && <StudentContextPanel studentId={contextStudentId} onClose={() => setContextStudentId(null)} />}
 
-      {importModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => { setImportModal(false); setImportResult(null); setImportFile(null); }}>
+      {resetInfo && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setResetInfo(null)}>
           <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 animate-scale-in" onClick={(e) => e.stopPropagation()}>
-            <h2 className="text-lg font-bold text-slate-800 mb-2">Bulk import students</h2>
-            <p className="text-slate-500 text-sm mb-4">Upload a CSV or Excel file with columns: deptNo, name, password, department, cgpa, email, phone</p>
-            <a href="#" onClick={(e) => { e.preventDefault(); downloadTemplate(); }} className="text-primary-600 text-sm font-medium hover:underline block mb-4">Download CSV template</a>
-            <form onSubmit={doBulkImport} className="space-y-3">
-              <input type="file" accept=".csv,.xlsx,.xls" onChange={(e) => setImportFile(e.target.files?.[0])} className="w-full text-sm" />
-              {importResult && (
-                <div className="rounded-lg bg-slate-50 p-3 text-sm">
-                  <p className="font-medium text-slate-700">Created: {importResult.created}</p>
-                  {importResult.errors?.length > 0 && (
-                    <p className="text-amber-600 mt-1">Errors: {importResult.errors.length} row(s) – {importResult.errors.slice(0, 3).map((e) => `Row ${e.row}: ${e.message}`).join('; ')}{importResult.errors.length > 3 ? '…' : ''}</p>
-                  )}
-                </div>
-              )}
-              <div className="flex gap-2 pt-2">
-                <button type="submit" disabled={importing} className="btn-primary flex-1 disabled:opacity-50">{importing ? 'Importing…' : 'Import'}</button>
-                <button type="button" onClick={() => { setImportModal(false); setImportResult(null); setImportFile(null); }} className="btn-secondary">Close</button>
-              </div>
-            </form>
+            <h2 className="text-lg font-bold text-slate-800 mb-2">Temporary password created</h2>
+            <p className="text-slate-600 text-sm mb-4">
+              Share this password securely with the student. They should log in with it and then change it from their profile.
+            </p>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-2">
+              <p className="text-sm text-slate-700"><span className="font-semibold">Student:</span> {resetInfo.name} ({resetInfo.deptNo})</p>
+              <p className="text-sm text-slate-700">
+                <span className="font-semibold">Temporary password:</span>{' '}
+                <span className="font-mono bg-white px-2 py-1 rounded border border-slate-200 select-all">{resetInfo.tempPassword}</span>
+              </p>
+            </div>
+            <div className="mt-4 flex justify-end">
+              <button type="button" onClick={() => setResetInfo(null)} className="btn-primary">Close</button>
+            </div>
           </div>
         </div>
       )}

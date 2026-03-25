@@ -9,6 +9,9 @@ export const studentApi = axios.create({
 studentApi.interceptors.request.use((config) => {
   const token = localStorage.getItem('studentToken');
   if (token) config.headers.Authorization = `Bearer ${token}`;
+  if (config.data instanceof FormData) {
+    delete config.headers['Content-Type'];
+  }
   return config;
 });
 studentApi.interceptors.response.use(

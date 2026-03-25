@@ -12,6 +12,10 @@ export default function StudentProfile() {
   const [form, setForm] = useState({ name: '', department: '', cgpa: '', email: '', phone: '' });
   const [saving, setSaving] = useState(false);
   const [uploadingResume, setUploadingResume] = useState(false);
+  const [pwdCurrent, setPwdCurrent] = useState('');
+  const [pwdNew, setPwdNew] = useState('');
+  const [pwdConfirm, setPwdConfirm] = useState('');
+  const [pwdLoading, setPwdLoading] = useState(false);
 
   const load = () => {
     setLoading(true);
@@ -67,23 +71,24 @@ export default function StudentProfile() {
     const file = e.target?.files?.[0];
     if (!file) return;
     const ext = (file.name || '').toLowerCase().split('.').pop();
-    if (!['pdf', 'doc', 'docx'].includes(ext)) {
-      toast.error('Please upload PDF or DOC/DOCX (max 5MB)');
+    if (ext !== 'pdf') {
+      toast.error('Please upload a PDF file.');
       return;
     }
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error('File too large (max 5MB)');
+    const maxSize = 20 * 1024 * 1024;
+    if (file.size > maxSize) {
+      toast.error('File too large (max 20MB).');
       return;
     }
     setUploadingResume(true);
     try {
       const formData = new FormData();
       formData.append('resume', file);
-      const config = {
-        headers: { ...studentApi.defaults.headers.common },
-      };
-      delete config.headers['Content-Type'];
-      const { data } = await studentApi.post('/me/resume', formData, config);
+      const { data } = await studentApi.post('/me/resume', formData, {
+        timeout: 120000,
+        maxContentLength: 25 * 1024 * 1024,
+        maxBodyLength: 25 * 1024 * 1024,
+      });
       setMe(data);
       toast.success('Resume uploaded');
     } catch (err) {
@@ -117,6 +122,34 @@ export default function StudentProfile() {
       toast.success('Resume removed');
     } catch (e) {
       toast.error(e.response?.data?.error || 'Failed');
+    }
+  };
+
+  const changePassword = async (e) => {
+    e.preventDefault();
+    if (pwdNew.length < 6) {
+      toast.error('New password must be at least 6 characters');
+      return;
+    }
+    if (pwdNew !== pwdConfirm) {
+      toast.error('New passwords do not match');
+      return;
+    }
+    setPwdLoading(true);
+    try {
+      await studentApi.post('/me/change-password', {
+        currentPassword: pwdCurrent,
+        newPassword: pwdNew,
+        confirmPassword: pwdConfirm,
+      });
+      toast.success('Password updated. Use the new password next time you log in.');
+      setPwdCurrent('');
+      setPwdNew('');
+      setPwdConfirm('');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to update password');
+    } finally {
+      setPwdLoading(false);
     }
   };
 
@@ -200,7 +233,7 @@ export default function StudentProfile() {
                   </div>
                   <div>
                     <p className="font-medium text-slate-800">Resume uploaded</p>
-                    <p className="text-sm text-slate-500">PDF or DOC · Max 5MB</p>
+                    <p className="text-sm text-slate-500">PDF only · Max 20MB</p>
                   </div>
                 </div>
                 <div className="flex gap-2">
@@ -214,10 +247,10 @@ export default function StudentProfile() {
                 </div>
               </div>
             ) : (
-              <p className="text-slate-500 text-sm mb-3">Upload your resume (PDF or DOC/DOCX, max 5MB).</p>
+              <p className="text-slate-500 text-sm mb-3">Upload your resume (PDF only, max 20MB).</p>
             )}
             <label className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 text-slate-700 text-sm font-medium hover:bg-slate-50 cursor-pointer">
-              <input type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" className="hidden" onChange={onResumeSelect} disabled={uploadingResume} />
+              <input type="file" accept=".pdf,application/pdf" className="hidden" onChange={onResumeSelect} disabled={uploadingResume} />
               {uploadingResume ? (
                 <span className="text-slate-500">Uploading…</span>
               ) : (
@@ -228,6 +261,56 @@ export default function StudentProfile() {
               )}
             </label>
           </div>
+        </div>
+      </div>
+
+      {/* Change password */}
+      <div className="mt-6 px-4 sm:px-0">
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden max-w-lg">
+          <div className="px-6 py-4 border-b border-slate-100">
+            <h2 className="font-bold text-slate-900 text-lg">Change password</h2>
+            <p className="text-slate-500 text-sm mt-0.5">Use DOB as current password if you have never changed it.</p>
+          </div>
+          <form onSubmit={changePassword} className="p-6 space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Current password</label>
+              <input
+                type="password"
+                className="w-full px-4 py-2 rounded-lg border border-slate-200"
+                value={pwdCurrent}
+                onChange={(e) => setPwdCurrent(e.target.value)}
+                required
+                placeholder="••••••••"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">New password</label>
+              <input
+                type="password"
+                className="w-full px-4 py-2 rounded-lg border border-slate-200"
+                value={pwdNew}
+                onChange={(e) => setPwdNew(e.target.value)}
+                required
+                minLength={6}
+                placeholder="••••••••"
+              />
+              <p className="text-xs text-slate-400 mt-1">At least 6 characters</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Confirm new password</label>
+              <input
+                type="password"
+                className="w-full px-4 py-2 rounded-lg border border-slate-200"
+                value={pwdConfirm}
+                onChange={(e) => setPwdConfirm(e.target.value)}
+                required
+                placeholder="••••••••"
+              />
+            </div>
+            <button type="submit" disabled={pwdLoading} className="btn-primary w-full disabled:opacity-50">
+              {pwdLoading ? 'Updating…' : 'Update password'}
+            </button>
+          </form>
         </div>
       </div>
 

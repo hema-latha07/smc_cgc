@@ -25,6 +25,10 @@
 4. **If you already had the database** and are adding the chat or other features, run the migrations instead:
    - Open **`database/migrations/001_chat_tables.sql`** in MySQL and execute it (with `USE smc_career_connect;` first). This adds chat tables.
    - If the project has **`database/migrations/003_admin_features.sql`**, run that too (adds company notes, min CGPA on drives). See **database/DATABASE_WORKBENCH.md** for the full migration order.
+   - Run **`database/migrations/004_multi_rounds.sql`** for multi-round placement support (drive rounds, application round status, current round column). Required for round-based Pass/Fail and automatic notifications.
+   - Run **`database/migrations/005_soft_delete.sql`** for recycle bin support (soft delete and restore for students, companies, drives, events).
+   - Run **`database/migrations/006_student_password_hash.sql`** for student-chosen passwords (after first login).
+   - Run **`database/migrations/007_training_attendance.sql`** for training attendance columns on `event_registrations`.
 
 5. **(Optional)** Add sample data:
    - From the project root, run:
@@ -45,15 +49,17 @@
    cd smc-career-connect/server
    ```
 
-2. Create or edit the **`.env`** file in the `server` folder with your MySQL details:
+2. Create or edit the **`.env`** file in the `server` folder with your MySQL details and secrets:
    ```
    PORT=5000
    DB_HOST=localhost
    DB_USER=root
    DB_PASSWORD=your_mysql_password
    DB_NAME=smc_career_connect
+   JWT_SECRET=your-secret-key-change-in-production
+   ALLOWED_ORIGIN=http://localhost:3000
    ```
-   Replace `your_mysql_password` with your actual MySQL password.
+   Replace `your_mysql_password` with your actual MySQL password and set a strong `JWT_SECRET`. For production, change `ALLOWED_ORIGIN` to the deployed frontend URL (e.g. `https://career.example.com`).
 
 3. Install dependencies and start the server:
    ```bash
@@ -118,3 +124,9 @@
 
 - **Blank or broken page**  
   Confirm you are visiting **http://localhost:3000** (client), not 5000 (API only).
+
+- **Admin shows no data (drives, companies, chat empty)**  
+  1. Ensure the **backend is running** on port 5000 (`cd server` → `npm run dev`).  
+  2. **Log in** as admin (e.g. username `admin`, password `admin123` if you ran the seed).  
+  3. Run **seed data** to add sample companies and an admin: `cd server` then `npm run seed`.  
+  4. If you see an amber “Could not load…” banner, click **Retry** after starting the backend.

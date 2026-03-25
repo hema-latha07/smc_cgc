@@ -69,7 +69,10 @@ export default function AdminChat() {
   }, []);
 
   useEffect(() => {
-    adminApi.get('/chat/rooms').then(({ data }) => setRooms(data.rooms || [])).catch(() => {}).finally(() => setLoadingRooms(false));
+    adminApi.get('/chat/rooms').then(({ data }) => setRooms(data.rooms || [])).catch((err) => {
+      setRooms([]);
+      toast.error(err.response?.status === 401 ? 'Please log in again' : 'Could not load chats. Is the backend running?');
+    }).finally(() => setLoadingRooms(false));
   }, []);
 
   const selectedRoomId = selectedRoom ? selectedRoom.id : (roomIdParam ? parseInt(roomIdParam, 10) : null);
