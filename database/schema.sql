@@ -1,6 +1,4 @@
 
--- SMC Career Connect - MySQL Schema
--- Import this in MySQL Workbench (File > Run SQL Script)
 
 SET FOREIGN_KEY_CHECKS = 0;
 SET SQL_MODE = 'NO_AUTO_VALUE_ON_ZERO';
